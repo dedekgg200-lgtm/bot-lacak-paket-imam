@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 
-# === GANTI DENGAN TOKEN BOT KAMU DARI BOTFATHER ===
+# === TOKEN SUDAH DIMASUKKAN ===
 TOKEN_TELEGRAM = "8868907979:AAEEZ25MkU2ViOkwEDfAoMztGlTAPAmkxvo"
 
 bot = telebot.TeleBot(TOKEN_TELEGRAM)
@@ -14,7 +14,8 @@ def mulai_pesan(pesan):
 
 📋 Contoh: JP0123456789012
 ⚠️ Hanya untuk resi SiCepat (awalan JP atau SC)
-📦 Tampil: Jenis Layanan (COD/Non-COD), Nama Penerima, Alamat, Riwayat""")
+📦 Tampil: Jenis Layanan (COD/Non-COD), Nama Penerima, Alamat, Riwayat
+❌ Jika belum terdaftar: akan diberitahu RESI TIDAK DITEMUKAN""")
 
 @bot.message_handler(func=lambda pesan: True)
 def lacak_paket(pesan):
@@ -41,14 +42,27 @@ def lacak_paket(pesan):
             return
 
         isi = BeautifulSoup(respons.text, "html.parser")
+        semua_teks = isi.get_text()
+
+        # === CEK APAKAH RESI TERDAFTAR ===
+        if re.search(r'Belum ditemukan|Tidak ditemukan|No Data|Data tidak ada|AWB Not Found', semua_teks, re.IGNORECASE) or len(semua_teks.strip()) < 100:
+            bot.reply_to(pesan, f"""⚠️ RESI TIDAK DITEMUKAN!
+
+Nomor resi: {resi}
+
+Kemungkinan penyebab:
+❌ Nomor resi salah atau belum terdaftar di sistem SiCepat
+⏳ Paket baru dikirim, tunggu 1-2 hari
+📝 Cek kembali penulisan nomor resi
+
+Silakan coba lagi nanti.""")
+            return
 
         # Ambil data
-        jenis_layanan = ""
-        nama_penerima = ""
-        alamat_penerima = ""
-        status = ""
-
-        semua_teks = isi.get_text()
+        jenis_layanan = "ℹ️ Belum teridentifikasi"
+        nama_penerima = "Tidak tersedia"
+        alamat_penerima = "Tidak tersedia"
+        status = "Sedang diproses"
 
         # Cari Jenis Layanan & COD
         if re.search(r'COD', semua_teks.upper()):
@@ -59,38 +73,31 @@ def lacak_paket(pesan):
             jenis_layanan = "✅ SiCepat REG — SUDAH DIBAYAR"
         elif re.search(r'HALU', semua_teks.upper()):
             jenis_layanan = "✅ SiCepat HALU — SUDAH DIBAYAR"
-        else:
-            jenis_layanan = "ℹ️ Jenis layanan belum teridentifikasi"
 
         # Cari Nama Penerima
         cocok_penerima = re.search(r'Penerima[:\s]+([^\n\r]+)', semua_teks)
-        if cocok_penerima:
+        if cocok_penerima and cocok_penerima.group(1).strip():
             nama_penerima = cocok_penerima.group(1).strip()
 
         # Cari Alamat
         cocok_alamat = re.search(r'Alamat Tujuan[:\s]+([^\n\r]+)', semua_teks)
-        if cocok_alamat:
+        if cocok_alamat and cocok_alamat.group(1).strip():
             alamat_penerima = cocok_alamat.group(1).strip()
 
         # Cari Status Terakhir
         cocok_status = re.search(r'Status[:\s]+([^\n\r]+)', semua_teks)
-        if cocok_status:
+        if cocok_status and cocok_status.group(1).strip():
             status = cocok_status.group(1).strip()
 
         # Susun balasan
         balasan = f"""📦 HASIL PELACAKAN: {resi}
 ━━━━━━━━━━━━━━━━━━━━━
 📋 Jenis: {jenis_layanan}
-"""
+👤 Penerima: {nama_penerima}
+📍 Alamat: {alamat_penerima}
+✅ Status: {status}
 
-        if nama_penerima:
-            balasan += f"👤 Penerima: {nama_penerima}\n"
-        if alamat_penerima:
-            balasan += f"📍 Alamat: {alamat_penerima}\n"
-        if status:
-            balasan += f"✅ Status: {status}\n"
-
-        balasan += "\n💡 Kirim resi lain untuk lacak berikutnya."
+💡 Kirim resi lain untuk lacak berikutnya."""
 
         bot.reply_to(pesan, balasan)
 
@@ -101,4 +108,4 @@ def lacak_paket(pesan):
 if __name__ == "__main__":
     print("✅ Bot SiCepat sedang berjalan...")
     bot.infinity_polling()
-                
+        
