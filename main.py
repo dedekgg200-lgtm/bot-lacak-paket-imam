@@ -1,7 +1,7 @@
 import telebot
 import requests
 
-TOKEN_TELEGRAM = "8868907979:AAEEZ25MkU2Vi0kwEDfAoMztG1TAPAmkxvo"
+TOKEN_TELEGRAM = "8868907979:AAEEZ25MkU2ViOkwEDfAoMztGlTAPAmkxvo"
 API_RAJAONGKIR = "xioUvfUod679017a75bec59bj8r0rgxs"
 
 bot = telebot.TeleBot(TOKEN_TELEGRAM)
