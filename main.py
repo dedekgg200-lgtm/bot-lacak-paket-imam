@@ -1,118 +1,107 @@
 import telebot
 import requests
-from bs4 import BeautifulSoup
 import re
 
-# === TOKEN SUDAH DIMASUKKAN ===
+# === SUDAH DIISI LENGKAP ===
 TOKEN_TELEGRAM = "8868907979:AAEEZ25MkU2ViOkwEDfAoMztGlTAPAmkxvo"
+API_KEY_BINDERBYTE = "sk_14k7x3i9qf43m1luke9nl1loctp9bzvh7sugqdpo6vqmjj8yl1oopwd4uufrsjm2"
+URL_API = "https://api.binderbyte.com/v1/track"
 
 bot = telebot.TeleBot(TOKEN_TELEGRAM)
 
 @bot.message_handler(commands=['start'])
 def mulai_pesan(pesan):
-    bot.reply_to(pesan, """✅ Halo! Kirimkan NOMOR RESI J&T — BEBAS! Mau 1 atau banyak sekaligus!
+    bot.reply_to(pesan, """✅ Halo! Kirimkan NOMOR RESI PAKET!
 
-📋 Format Resi J&T: awalan JZ... atau JT...
-📋 Cara kirim banyak resi:
-   JZ0123456789012
-   JT9876543210987
+📋 Bisa lacak: J&T, SiCepat, JNE, TIKI, Pos Indonesia, dll
+📋 Bisa kirim 1 atau banyak sekaligus!
 
-📦 Yang tampil:
+📦 Yang tampil LENGKAP:
    ✅ Nama Penerima
-   ✅ Status COD / Sudah Dibayar
-   ✅ Status Paket & Tanggal
-   ❌ Belum terdaftar → RESI TIDAK DITEMUKAN""")
+   ✅ Alamat Tujuan
+   ✅ Status COD + Nilai Barang
+   ✅ Riwayat Pengiriman Lengkap
+   ❌ Resi salah → langsung diberitahu""")
 
 
-def lacak_jnt(resi):
-    url = f"https://www.jet.co.id/track/{resi}"
-    kepala = {"User-Agent": "Mozilla/5.0"}
+def lacak_paket(resi):
     try:
-        respons = requests.get(url, headers=kepala, timeout=25)
+        param = {"api_key": API_KEY_BINDERBYTE, "awb": resi}
+        respons = requests.get(URL_API, params=param, timeout=30)
+        
         if respons.status_code != 200:
             return f"""📦 {resi}
 ━━━━━━━━━━━━━━━━━━━━━
-⚠️ Server J&T sedang sibuk"""
+⚠️ Sedang gangguan, coba sebentar lagi"""
 
-        isi = BeautifulSoup(respons.text, "html.parser")
-        semua_teks = isi.get_text()
+        data = respons.json()
 
-        # Cek resi terdaftar atau tidak
-        if re.search(r'Not Found|Tidak Ditemukan|No Data|Tidak ditemukan', semua_teks, re.IGNORECASE) or len(semua_teks.strip()) < 150:
+        if data.get("status") != 200 or not data.get("data"):
             return f"""📦 {resi}
 ━━━━━━━━━━━━━━━━━━━━━
 ❌ RESI TIDAK DITEMUKAN
-Nomor resi belum terdaftar atau salah."""
+Nomor resi salah atau belum terdaftar."""
 
-        # Cek COD atau Sudah Dibayar
-        if re.search(r'COD', semua_teks.upper()):
-            jenis = "⚠️ STATUS: COD — HARUS DIBAYAR SAAT SAMPAI!"
+        paket = data["data"]
+        ekspedisi = paket.get("courier", "-")
+        nama_penerima = paket.get("receiver_name", "Tidak tersedia")
+        alamat = paket.get("destination", "Tidak tersedia")
+        nilai_barang = paket.get("price", "-")
+        status = paket.get("status", "Sedang diproses")
+        tanggal = paket.get("date", "-")
+        layanan = paket.get("service", "-")
+
+        # Cek COD
+        if "COD" in str(layanan).upper() or "COD" in str(status).upper():
+            jenis = f"⚠️ COD — HARUS DIBAYAR! Rp{nilai_barang}"
         else:
-            jenis = "✅ STATUS: SUDAH DIBAYAR"
+            jenis = "✅ SUDAH DIBAYAR"
 
-        # Ambil Nama Penerima
-        nama_penerima = "Tidak tersedia"
-        cocok_nama = re.search(r'Penerima[:\s\n]+([^\n\r]{3,})', semua_teks, re.IGNORECASE)
-        if cocok_nama and cocok_nama.group(1).strip():
-            nama_penerima = cocok_nama.group(1).strip()
-
-        # Ambil Alamat
-        alamat = "Tidak tersedia"
-        cocok_alamat = re.search(r'Alamat Tujuan|Tujuan[:\s\n]+([^\n\r]{10,})', semua_teks, re.IGNORECASE)
-        if cocok_alamat and cocok_alamat.group(1).strip():
-            alamat = cocok_alamat.group(1).strip()[:80]
-
-        # Ambil Status Terakhir
-        status = "Sedang diproses"
-        cocok_status = re.search(r'Status|Keterangan[:\s\n]+([^\n\r]+)', semua_teks, re.IGNORECASE)
-        if cocok_status and cocok_status.group(1).strip():
-            status = cocok_status.group(1).strip()
-
-        # Ambil Tanggal
-        tanggal = "-"
-        cocok_tanggal = re.search(r'(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})', semua_teks)
-        if cocok_tanggal:
-            tanggal = cocok_tanggal.group(1)
+        # Riwayat terakhir
+        riwayat = paket.get("history", [])
+        lokasi_terakhir = "-"
+        if riwayat:
+            lokasi_terakhir = riwayat[-1].get("location", "-")
 
         return f"""📦 HASIL PELACAKAN: {resi}
 ━━━━━━━━━━━━━━━━━━━━━
-🏢 EKSPEDISI: J&T EXPRESS
+🏢 EKSPEDISI: {ekspedisi}
+📋 LAYANAN: {layanan}
 📋 {jenis}
-👤 NAMA PENERIMA: {nama_penerima}
-📍 ALAMAT TUJUAN: {alamat}
-✅ STATUS PAKET: {status}
+👤 PENERIMA: {nama_penerima}
+📍 TUJUAN: {alamat}
+✅ STATUS: {status}
+📍 LOKASI TERAKHIR: {lokasi_terakhir}
 📅 TANGGAL: {tanggal}"""
 
     except Exception as e:
         return f"""📦 {resi}
 ━━━━━━━━━━━━━━━━━━━━━
-⚠️ Terjadi kesalahan: {str(e)[:40]}"""
+⚠️ Kesalahan: {str(e)[:40]}"""
 
 
 @bot.message_handler(func=lambda pesan: True)
 def proses_pesan(pesan):
     teks = pesan.text.strip()
-    daftar_resi = re.findall(r'(?:JZ|JT)\d+', teks.upper())
+    daftar_resi = re.findall(r'[A-Z]{2}\d+|\d{10,}', teks.upper())
 
     if not daftar_resi:
-        bot.reply_to(pesan, """⚠️ Tidak menemukan nomor resi J&T!
+        bot.reply_to(pesan, """⚠️ Tidak menemukan nomor resi!
 
-Resi J&T biasanya diawali: JZ... atau JT...
-Kirim resi-nya ya! Bisa 1 atau banyak sekaligus!""")
+Kirim nomor resi-nya ya! Bisa J&T, SiCepat, JNE, dll!""")
         return
 
     if len(daftar_resi) == 1:
         bot.reply_to(pesan, f"🔍 Sedang melacak: {daftar_resi[0]}\nMohon tunggu sebentar...")
     else:
-        bot.reply_to(pesan, f"🔍 Sedang melacak {len(daftar_resi)} nomor resi...\nMohon tunggu sebentar...")
+        bot.reply_to(pesan, f"🔍 Sedang melacak {len(daftar_resi)} resi...\nMohon tunggu sebentar...")
 
     for resi in daftar_resi:
-        hasil = lacak_jnt(resi)
+        hasil = lacak_paket(resi)
         bot.reply_to(pesan, hasil)
 
 
-# JALANKAN BOT
 if __name__ == "__main__":
-    print("✅ Bot J&T Sedang berjalan...")
+    print("✅ Bot Pelacakan BinderByte — Sedang berjalan...")
     bot.infinity_polling()
     
