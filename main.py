@@ -44,7 +44,7 @@ def lacak_paket(resi):
 
     params = {
         "api_key": API_KEY,
-        "courier": "jnt",
+        "courier": "Sicepat",
         "awb": resi
     }
 
