@@ -4,42 +4,34 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+
 const BITESHIP_API_KEY = process.env.BITESHIP_API_KEY;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
 if (!BITESHIP_API_KEY) {
-  console.error("BITESHIP_API_KEY belum diatur.");
+  console.error("BITESHIP_API_KEY belum diisi di Railway.");
 }
 
 if (!TELEGRAM_TOKEN) {
-  console.error("TELEGRAM_TOKEN belum diatur.");
+  console.error("TELEGRAM_TOKEN belum diisi di Railway.");
 }
 
-const BITESHIP_URL = "https://api.biteship.com";
-const TELEGRAM_URL = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+// ================================
+// Biteship - Tracking SiCepat
+// ================================
+async function lacakSiCepat(resi) {
+  const url =
+    `https://api.biteship.com/v1/trackings/${encodeURIComponent(resi)}/couriers/sicepat`;
 
-let lastUpdateId = 0;
-
-// ===============================
-// Biteship API
-// ===============================
-async function biteship(path) {
-  const response = await fetch(`${BITESHIP_URL}${path}`, {
+  const response = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: BITESHIP_API_KEY,
+      "Authorization": BITESHIP_API_KEY,
       "Content-Type": "application/json"
     }
   });
 
-  const text = await response.text();
-
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
-  }
+  const data = await response.json();
 
   return {
     status: response.status,
@@ -47,202 +39,170 @@ async function biteship(path) {
   };
 }
 
-// ===============================
-// Telegram API
-// ===============================
+// ================================
+// Telegram
+// ================================
 async function telegram(method, body = {}) {
-  const response = await fetch(`${TELEGRAM_URL}/${method}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
+  const response = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
 
-  return await response.json();
+  return response.json();
 }
 
-async function sendMessage(chatId, text) {
+async function kirimPesan(chatId, text) {
   return telegram("sendMessage", {
     chat_id: chatId,
     text: text
   });
 }
 
-// ===============================
-// Format tracking
-// ===============================
-function formatTracking(data) {
-  if (!data) {
-    return "Data tracking tidak ditemukan.";
+// ================================
+// Format hasil tracking
+// ================================
+function formatTracking(data, resi) {
+  if (!data || data.success === false) {
+    return (
+      `❌ Resi SiCepat tidak ditemukan.\n\n` +
+      `Nomor resi: ${resi}\n\n` +
+      `Pastikan nomor resi sudah benar.`
+    );
   }
 
-  const courier = data.courier?.company || "-";
-  const waybill = data.waybill_id || "-";
-  const status = data.status || "-";
+  const courier = data.courier || {};
+  const history = Array.isArray(data.history) ? data.history : [];
 
-  let message =
-`📦 HASIL LACAK PAKET
+  let pesan =
+    `📦 TRACKING SICEPAT\n\n` +
+    `Resi: ${data.waybill_id || resi}\n` +
+    `Kurir: ${courier.company || "SiCepat"}\n` +
+    `Status: ${data.status || "-"}\n`;
 
-Kurir : ${courier.toUpperCase()}
-Resi  : ${waybill}
-Status: ${status}`;
-
-  if (data.history && data.history.length > 0) {
-    message += "\n\nRiwayat terakhir:";
-
-    const history = data.history.slice(-5).reverse();
-
-    for (const item of history) {
-      message += `\n\n• ${item.status || "-"}\n${item.note || ""}`;
-    }
+  if (data.origin?.address) {
+    pesan += `Asal: ${data.origin.address}\n`;
   }
 
-  if (data.link) {
-    message += `\n\n🔗 Tracking:\n${data.link}`;
+  if (data.destination?.address) {
+    pesan += `Tujuan: ${data.destination.address}\n`;
   }
 
-  return message;
+  if (history.length > 0) {
+    pesan += `\n📍 RIWAYAT:\n`;
+
+    history.slice(0, 8).forEach((item) => {
+      const tanggal = item.updated_at || item.date || "";
+      const deskripsi =
+        item.note ||
+        item.description ||
+        item.status ||
+        "Update pengiriman";
+
+      pesan += `\n${tanggal}\n${deskripsi}\n`;
+    });
+  }
+
+  return pesan;
 }
 
-// ===============================
-// Pesan bantuan
-// ===============================
-async function handleMessage(message) {
+// ================================
+// Proses pesan Telegram
+// ================================
+async function prosesPesan(message) {
+  if (!message || !message.chat) return;
+
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
 
-  if (!text) return;
-
   if (text === "/start") {
-    await sendMessage(
+    await kirimPesan(
       chatId,
-`👋 Halo!
-
-Bot Lacak Paket siap digunakan.
-
-Untuk melacak paket, kirim dengan format:
-
-/lacak jne RESI
-
-Contoh:
-/lacak jne 0123456789
-
-Ganti "jne" dengan kode kurir dan masukkan nomor resi.`
+      `Halo 👋\n\nBot ini digunakan untuk melacak paket SiCepat.\n\n` +
+      `Gunakan perintah:\n\n` +
+      `/lacak NOMOR_RESI\n\n` +
+      `Contoh:\n` +
+      `/lacak 004646985893`
     );
 
     return;
   }
 
-  if (text === "/help") {
-    await sendMessage(
-      chatId,
-`Cara menggunakan:
+  if (text.startsWith("/lacak")) {
+    const bagian = text.split(/\s+/);
+    const resi = bagian[1];
 
-/lacak jne NOMOR_RESI
-
-Contoh:
-/lacak jne 0123456789`
-    );
-
-    return;
-  }
-
-  if (text.toLowerCase().startsWith("/lacak")) {
-    const parts = text.split(/\s+/);
-
-    if (parts.length < 3) {
-      await sendMessage(
+    if (!resi) {
+      await kirimPesan(
         chatId,
-`Format salah.
-
-Gunakan:
-
-/lacak jne NOMOR_RESI
-
-Contoh:
-/lacak jne 0123456789`
+        `Masukkan nomor resi SiCepat.\n\n` +
+        `Contoh:\n` +
+        `/lacak 004646985893`
       );
 
       return;
     }
 
-    const courier = parts[1].toLowerCase();
-    const waybill = parts.slice(2).join("").trim();
-
-    await sendMessage(
+    await kirimPesan(
       chatId,
-      `🔎 Sedang mengecek resi ${waybill}...`
+      `🔎 Sedang mengecek resi SiCepat:\n${resi}\n\nMohon tunggu...`
     );
 
     try {
-      // Public Tracking API Biteship
-      const result = await biteship(
-        `/v1/trackings/${encodeURIComponent(waybill)}/couriers/${encodeURIComponent(courier)}`
-      );
+      const result = await lacakSiCepat(resi);
+
+      console.log("Biteship response:", result);
 
       if (result.status >= 200 && result.status < 300) {
-        await sendMessage(
-          chatId,
-          formatTracking(result.data)
-        );
+        const pesan = formatTracking(result.data, resi);
+        await kirimPesan(chatId, pesan);
       } else {
-        console.error("Biteship error:", result.status, result.data);
-
-        await sendMessage(
+        await kirimPesan(
           chatId,
-`❌ Paket tidak ditemukan.
-
-Kurir : ${courier.toUpperCase()}
-Resi  : ${waybill}
-
-Pastikan nama kurir dan nomor resi sudah benar.`
+          `❌ Gagal mengambil data tracking.\n\n` +
+          `Nomor resi: ${resi}\n` +
+          `Status API: ${result.status}\n\n` +
+          `${result.data?.message || "Silakan coba lagi."}`
         );
       }
     } catch (error) {
-      console.error("Tracking error:", error);
+      console.error("ERROR TRACKING:", error);
 
-      await sendMessage(
+      await kirimPesan(
         chatId,
-        "❌ Terjadi kesalahan saat menghubungi Biteship."
+        `❌ Terjadi kesalahan saat mengecek resi.\n\n` +
+        `Silakan coba lagi beberapa saat lagi.`
       );
     }
 
     return;
   }
 
-  await sendMessage(
+  await kirimPesan(
     chatId,
-`Perintah tidak dikenali.
-
-Gunakan:
-
-/start
-
-atau:
-
-/lacak jne NOMOR_RESI`
+    `Perintah tidak dikenali.\n\n` +
+    `Gunakan:\n` +
+    `/start\n\n` +
+    `atau:\n` +
+    `/lacak NOMOR_RESI`
   );
 }
 
-// ===============================
-// Polling Telegram
-// ===============================
-async function startTelegramBot() {
-  console.log("Bot Telegram mulai berjalan...");
+// ================================
+// Telegram Long Polling
+// ================================
+let offset = 0;
 
-  try {
-    await telegram("deleteWebhook", {
-      drop_pending_updates: true
-    });
-  } catch (error) {
-    console.error("Gagal menghapus webhook:", error.message);
-  }
-
+async function pollingTelegram() {
   while (true) {
     try {
       const result = await telegram("getUpdates", {
-        offset: lastUpdateId + 1,
+        offset: offset,
         timeout: 30
       });
 
@@ -253,40 +213,43 @@ async function startTelegramBot() {
       }
 
       for (const update of result.result) {
-        lastUpdateId = update.update_id;
+        offset = update.update_id + 1;
 
-        if (update.message) {
-          await handleMessage(update.message);
+        try {
+          await prosesPesan(update.message);
+        } catch (error) {
+          console.error("ERROR PROSES TELEGRAM:", error);
         }
       }
     } catch (error) {
-      console.error("Polling error:", error.message);
-
+      console.error("Polling error:", error);
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 }
 
-// ===============================
-// Server
-// ===============================
+// ================================
+// Test server
+// ================================
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "Bot Lacak Paket aktif"
-  });
-});
-
-app.get("/health", (req, res) => {
-  res.json({
-    success: true,
-    telegram: !!TELEGRAM_TOKEN,
-    biteship: !!BITESHIP_API_KEY
+    message: "Bot Tracking SiCepat aktif"
   });
 });
 
 app.listen(PORT, () => {
   console.log(`Server berjalan di port ${PORT}`);
-});
 
-startTelegramBot();
+  if (BITESHIP_API_KEY && TELEGRAM_TOKEN) {
+    console.log("Biteship API: OK");
+    console.log("Telegram Token: OK");
+    console.log("Bot SiCepat mulai berjalan...");
+
+    pollingTelegram();
+  } else {
+    console.error(
+      "Bot tidak dijalankan karena BITESHIP_API_KEY atau TELEGRAM_TOKEN belum ada."
+    );
+  }
+});
