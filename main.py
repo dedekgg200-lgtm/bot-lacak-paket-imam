@@ -293,7 +293,11 @@ def lacak_resi(resi):
         # -------------------------------------------------
 
         data = response.json()
-
+    
+        print("========== RAW BITESHIP RESPONSE ==========")
+        print(data)
+        print("============================================")
+        
         if not isinstance(
             data,
             dict
