@@ -3,7 +3,13 @@ import re
 import time
 import requests
 import telebot
+
 from telebot import types
+
+
+# =========================================================
+# CONFIG
+# =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINDERBYTE_API_KEY = os.getenv("BINDERBYTE_API_KEY")
@@ -18,87 +24,10 @@ if not BINDERBYTE_API_KEY:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Menyimpan ekspedisi yang dipilih pengguna
-user_courier = {}
 
-
-# ==================================================
-# MENU
-# ==================================================
-
-def menu_ekspedisi():
-
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-
-    keyboard.add(
-        types.InlineKeyboardButton(
-            "🔎 Cari Resi SiCepat",
-            callback_data="courier_sicepat"
-        ),
-        types.InlineKeyboardButton(
-            "🔎 Cari Resi Ninja",
-            callback_data="courier_ninja"
-        )
-    )
-
-    return keyboard
-
-
-# ==================================================
-# START
-# ==================================================
-
-@bot.message_handler(commands=["start"])
-def start(message):
-
-    bot.send_message(
-        message.chat.id,
-        "👋 Halo! Selamat datang di Bot Tracking Paket.\n\n"
-        "Silakan pilih ekspedisi yang ingin dilacak:",
-        reply_markup=menu_ekspedisi()
-    )
-
-
-# ==================================================
-# PILIH EKSPEDISI
-# ==================================================
-
-@bot.callback_query_handler(
-    func=lambda call: call.data in [
-        "courier_sicepat",
-        "courier_ninja"
-    ]
-)
-def pilih_ekspedisi(call):
-
-    chat_id = call.message.chat.id
-
-    if call.data == "courier_sicepat":
-
-        user_courier[chat_id] = "sicepat"
-        nama = "SiCepat"
-
-    else:
-
-        user_courier[chat_id] = "ninja"
-        nama = "Ninja"
-
-    bot.answer_callback_query(call.id)
-
-    bot.send_message(
-        chat_id,
-        f"✍️ Kirim nomor resi {nama}.\n\n"
-        "Bisa 1 sampai maksimal 50 resi sekaligus.\n"
-        "Pisahkan dengan enter, spasi, atau koma.\n\n"
-        "Contoh:\n"
-        "2937051252\n"
-        "2937051253"
-    )
-
-
-# ==================================================
+# =========================================================
 # SENSOR NOMOR HP
-# ==================================================
+# =========================================================
 
 def sensor_nomor_hp(nomor):
 
@@ -107,92 +36,88 @@ def sensor_nomor_hp(nomor):
 
     nomor = str(nomor).strip()
 
-    # Hanya angka
-    nomor = re.sub(r"\D", "", nomor)
+    # Hanya simpan angka
+    nomor = re.sub(r"[^0-9+]", "", nomor)
 
     if not nomor:
         return "Tidak tersedia"
 
+    # Kalau terlalu pendek, jangan dipaksakan
     if len(nomor) <= 6:
-        return "*" * len(nomor)
+        return nomor
 
     # Contoh:
     # 081234567890
     # menjadi:
     # 0812******90
 
-    jumlah_bintang = len(nomor) - 6
-
     return (
         nomor[:4]
-        + ("*" * jumlah_bintang)
+        + ("*" * (len(nomor) - 6))
         + nomor[-2:]
     )
 
 
-# ==================================================
+# =========================================================
 # AMBIL FIELD
-# ==================================================
+# =========================================================
 
-def ambil_field(data, fields):
+def ambil_field(data, daftar_field):
 
     if not isinstance(data, dict):
         return None
 
-    for field in fields:
+    for field in daftar_field:
 
         value = data.get(field)
 
-        if value is not None and str(value).strip() != "":
-            return str(value).strip()
+        if value is not None:
+            value = str(value).strip()
+
+            if value:
+                return value
 
     return None
 
 
-# ==================================================
+# =========================================================
 # NOMOR HP
-# ==================================================
+# =========================================================
 
 def ambil_nomor_hp(data):
 
     summary = data.get("summary", {})
     detail = data.get("detail", {})
 
-    nomor = None
+    daftar_field = [
+        "receiver_phone",
+        "receiver_phone_number",
+        "phone",
+        "phone_number"
+    ]
 
-    if isinstance(detail, dict):
+    nomor = ambil_field(
+        detail,
+        daftar_field
+    )
 
-        nomor = (
-            detail.get("receiver_phone")
-            or detail.get("receiver_phone_number")
-            or detail.get("phone")
-            or detail.get("phone_number")
+    if not nomor:
+        nomor = ambil_field(
+            summary,
+            daftar_field
         )
 
-    if not nomor and isinstance(summary, dict):
-
-        nomor = (
-            summary.get("receiver_phone")
-            or summary.get("receiver_phone_number")
-            or summary.get("phone")
-            or summary.get("phone_number")
-        )
+    if not nomor:
+        return "Tidak tersedia"
 
     return sensor_nomor_hp(nomor)
 
 
-# ==================================================
+# =========================================================
 # STATUS PEMBAYARAN
-# ==================================================
+# =========================================================
 
 def status_pembayaran(data):
-
-    """
-    Tidak menebak status pembayaran.
-
-    Hanya membaca informasi pembayaran yang
-    benar-benar diberikan API.
-    """
 
     summary = data.get("summary", {})
     detail = data.get("detail", {})
@@ -205,85 +130,78 @@ def status_pembayaran(data):
     if isinstance(detail, dict):
         sumber.append(detail)
 
-    fields = [
+    daftar_field = [
         "payment_status",
         "payment_state",
         "payment",
         "payment_method",
         "payment_type",
-        "cod_status"
+        "cod_status",
+        "cod",
+        "is_cod"
     ]
 
     for bagian in sumber:
 
-        for field in fields:
+        for field in daftar_field:
 
             value = bagian.get(field)
 
             if value is None:
                 continue
 
-            text = str(value).strip().lower()
+            text = str(value).strip()
 
             if not text:
                 continue
 
+            lower = text.lower()
+
             # Sudah dibayar
-            if text in [
+            if any(kata in lower for kata in [
                 "paid",
-                "sudah dibayar",
-                "sudah bayar",
                 "dibayar",
+                "sudah bayar",
+                "sudah dibayar",
                 "lunas",
                 "settled"
-            ]:
+            ]):
                 return "✅ SUDAH DIBAYAR"
 
-            # Belum dibayar
-            if text in [
+            # Menunggu pembayaran / COD
+            if any(kata in lower for kata in [
+                "cod",
                 "unpaid",
-                "belum dibayar",
                 "belum bayar",
+                "belum dibayar",
                 "menunggu pembayaran",
-                "pending",
-                "waiting payment",
-                "waiting for payment"
-            ]:
-                return "⏳ MENUNGGU PEMBAYARAN"
+                "pending payment",
+                "waiting payment"
+            ]):
+                return "⚠️ MENUNGGU PEMBAYARAN"
 
-            if "menunggu pembayaran" in text:
-                return "⏳ MENUNGGU PEMBAYARAN"
+            # Boolean
+            if field in ["cod", "is_cod"]:
 
-            if "belum dibayar" in text:
-                return "⏳ MENUNGGU PEMBAYARAN"
+                if lower in ["true", "1", "yes"]:
+                    return "⚠️ MENUNGGU PEMBAYARAN"
 
-            if "sudah dibayar" in text:
-                return "✅ SUDAH DIBAYAR"
+                if lower in ["false", "0", "no"]:
+                    return "✅ SUDAH DIBAYAR"
 
-            if "paid" in text:
-                return "✅ SUDAH DIBAYAR"
-
-    return "⚪ DATA TIDAK TERSEDIA"
+    return "⚪ DATA PEMBAYARAN TIDAK TERSEDIA"
 
 
-# ==================================================
+# =========================================================
 # ISI PAKET
-# ==================================================
+# =========================================================
 
 def isi_paket(data):
 
     summary = data.get("summary", {})
     detail = data.get("detail", {})
 
-    sumber = []
-
-    if isinstance(summary, dict):
-        sumber.append(summary)
-
-    if isinstance(detail, dict):
-        sumber.append(detail)
-
-    fields = [
+    daftar_field = [
         "content",
         "contents",
         "item",
@@ -295,44 +213,45 @@ def isi_paket(data):
         "product_name"
     ]
 
-    for bagian in sumber:
+    isi = ambil_field(
+        detail,
+        daftar_field
+    )
 
-        for field in fields:
+    if not isi:
+        isi = ambil_field(
+            summary,
+            daftar_field
+        )
 
-            value = bagian.get(field)
+    if not isi:
+        return "Tidak tersedia"
 
-            if value is None:
-                continue
-
-            text = str(value).strip()
-
-            if text:
-                return text
-
-    return "Tidak tersedia"
+    return isi
 
 
-# ==================================================
+# =========================================================
 # STATUS PAKET
-# ==================================================
+# =========================================================
 
 def format_status(status):
 
     if not status:
-        return "⚪ DATA TIDAK TERSEDIA"
+        return "📦 BELUM DITERIMA"
 
     text = str(status).strip()
     lower = text.lower()
 
-    kata_diterima = [
+    kata_selesai = [
         "delivered",
         "received",
         "diterima",
         "sudah diterima",
-        "completed"
+        "completed",
+        "selesai"
     ]
 
-    for kata in kata_diterima:
+    for kata in kata_selesai:
 
         if kata in lower:
             return "✅ SUDAH DITERIMA"
@@ -340,9 +259,9 @@ def format_status(status):
     return f"📦 BELUM DITERIMA\n{text}"
 
 
-# ==================================================
+# =========================================================
 # RIWAYAT
-# ==================================================
+# =========================================================
 
 def format_riwayat(history):
 
@@ -366,15 +285,15 @@ def format_riwayat(history):
             or "-"
         )
 
-        lokasi = (
-            item.get("location")
-            or "-"
-        )
-
         keterangan = (
             item.get("desc")
             or item.get("description")
             or item.get("status")
+            or "-"
+        )
+
+        lokasi = (
+            item.get("location")
             or "-"
         )
 
@@ -390,17 +309,17 @@ def format_riwayat(history):
     return "\n".join(hasil)
 
 
-# ==================================================
-# TRACKING
-# ==================================================
+# =========================================================
+# LACAK SICEPAT
+# =========================================================
 
-def lacak_resi(resi, courier):
+def lacak_sicepat(resi):
 
     try:
 
         params = {
             "api_key": BINDERBYTE_API_KEY,
-            "courier": courier,
+            "courier": "sicepat",
             "awb": resi
         }
 
@@ -410,66 +329,53 @@ def lacak_resi(resi, courier):
             timeout=30
         )
 
-        print("================================")
-        print("RESI:", resi)
-        print("COURIER:", courier)
-        print("HTTP:", response.status_code)
-        print("RESPONSE:", response.text[:2000])
-        print("================================")
-
-        if response.status_code == 401:
-
-            return (
-                "❌ API KEY TIDAK VALID\n\n"
-                f"🔢 Resi: {resi}"
-            )
-
         if response.status_code != 200:
 
             return (
-                "❌ GAGAL MENGECEK RESI\n"
-                "━━━━━━━━━━━━━━━━\n\n"
-                f"🔢 Resi: {resi}\n"
-                f"HTTP: {response.status_code}"
+                f"⚠️ RESI : {resi}\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "Server tracking sedang bermasalah."
             )
 
         try:
-
-            result = response.json()
+            hasil_api = response.json()
 
         except Exception:
 
             return (
-                "❌ RESPONSE API TIDAK VALID\n\n"
-                f"🔢 Resi: {resi}"
+                f"⚠️ RESI : {resi}\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "Respons API tidak dapat dibaca."
             )
 
-        if result.get("status") != 200:
-
-            pesan = result.get(
-                "message",
-                "Resi tidak ditemukan"
-            )
+        # RESI TIDAK ADA
+        if (
+            hasil_api.get("status") != 200
+            or not hasil_api.get("data")
+        ):
 
             return (
-                "❌ RESI TIDAK DITEMUKAN\n"
-                "━━━━━━━━━━━━━━━━\n\n"
-                f"🔢 Resi : {resi}\n\n"
-                f"⚠️ {pesan}"
+                f"❌ RESI TIDAK DITEMUKAN\n"
+                "━━━━━━━━━━━━━━━━\n"
+                f"🔢 Resi : {resi}"
             )
 
-        data = result.get("data", {})
+        data = hasil_api.get("data", {})
 
-        if not isinstance(data, dict):
+        summary = data.get(
+            "summary",
+            {}
+        )
 
-            return (
-                "❌ DATA RESI TIDAK TERSEDIA\n\n"
-                f"🔢 Resi: {resi}"
-            )
+        detail = data.get(
+            "detail",
+            {}
+        )
 
-        summary = data.get("summary", {})
-        detail = data.get("detail", {})
-        history = data.get("history", [])
+        history = data.get(
+            "history",
+            []
+        )
 
         if not isinstance(summary, dict):
             summary = {}
@@ -477,95 +383,33 @@ def lacak_resi(resi, courier):
         if not isinstance(detail, dict):
             detail = {}
 
-        # ------------------------------
-        # RESI
-        # ------------------------------
-
-        nomor_resi = (
-            summary.get("awb")
-            or resi
-        )
-
-        # ------------------------------
-        # PENERIMA
-        # ------------------------------
+        # =================================================
+        # DATA UTAMA
+        # =================================================
 
         penerima = (
             detail.get("receiver")
-            or detail.get("receiver_name")
             or summary.get("receiver")
-            or summary.get("receiver_name")
             or "Tidak tersedia"
         )
-
-        # ------------------------------
-        # PENGIRIM
-        # ------------------------------
 
         pengirim = (
             detail.get("shipper")
-            or detail.get("shipper_name")
             or summary.get("shipper")
-            or summary.get("shipper_name")
             or "Tidak tersedia"
         )
 
-        # ------------------------------
-        # ALAMAT
-        # ------------------------------
-
         alamat = (
             detail.get("destination")
-            or detail.get("destination_address")
-            or detail.get("receiver_address")
-            or detail.get("address")
             or summary.get("destination")
             or "Tidak tersedia"
         )
 
-        # ------------------------------
-        # NOMOR HP
-        # ------------------------------
-
-        nomor_hp = ambil_nomor_hp(data)
-
-        # ------------------------------
-        # ISI PAKET
-        # ------------------------------
-
-        barang = isi_paket(data)
-
-        # ------------------------------
-        # STATUS
-        # ------------------------------
-
-        status_asli = (
+        status_api = (
             summary.get("status")
             or detail.get("status")
-            or "Tidak tersedia"
+            or ""
         )
-
-        status = format_status(status_asli)
-
-        # ------------------------------
-        # PEMBAYARAN
-        # ------------------------------
-
-        pembayaran = status_pembayaran(data)
-
-        # ------------------------------
-        # LAYANAN
-        # ------------------------------
-
-        layanan = (
-            summary.get("service")
-            or detail.get("service")
-            or "Tidak tersedia"
-        )
-
-        # ------------------------------
-        # TANGGAL
-        # ------------------------------
 
         tanggal = (
             summary.get("date")
@@ -573,80 +417,89 @@ def lacak_resi(resi, courier):
             or "Tidak tersedia"
         )
 
-        # ------------------------------
-        # EKSPEDISI
-        # ------------------------------
+        layanan = (
+            summary.get("service")
+            or detail.get("service")
+            or "Tidak tersedia"
+        )
 
-        if courier == "sicepat":
-            nama_ekspedisi = "SICEPAT"
-        else:
-            nama_ekspedisi = "NINJA"
+        nomor_hp = ambil_nomor_hp(data)
 
-        # ------------------------------
-        # RIWAYAT
-        # ------------------------------
+        pembayaran = status_pembayaran(data)
 
-        riwayat = format_riwayat(history)
+        paket = isi_paket(data)
 
-        # ------------------------------
+        status = format_status(
+            status_api
+        )
+
+        riwayat = format_riwayat(
+            history
+        )
+
+        # =================================================
         # HASIL
-        # ------------------------------
+        # =================================================
 
         return (
-            f"📦 TRACKING {nama_ekspedisi}\n"
-            f"━━━━━━━━━━━━━━━━\n\n"
+            "📦 TRACKING SICEPAT\n"
+            "━━━━━━━━━━━━━━━━\n\n"
 
-            f"🔢 Resi       : {nomor_resi}\n"
+            f"🔢 Resi       : {resi}\n"
             f"👤 Penerima   : {penerima}\n"
             f"📱 No. HP     : {nomor_hp}\n"
             f"📤 Pengirim   : {pengirim}\n"
             f"🏠 Alamat     : {alamat}\n\n"
 
-            f"📦 Isi Paket  : {barang}\n"
+            f"📦 Isi Paket  : {paket}\n"
             f"💰 Pembayaran : {pembayaran}\n"
             f"📌 Status     : {status}\n"
-            f"📋 Layanan    : {layanan}\n"
+            f"🚚 Layanan    : {layanan}\n"
             f"📅 Tanggal    : {tanggal}\n\n"
 
-            f"🚚 RIWAYAT\n"
-            f"━━━━━━━━━━━━━━━━\n"
+            "🚚 RIWAYAT\n"
+            "━━━━━━━━━━━━━━━━\n"
             f"{riwayat}"
         )
 
     except requests.exceptions.Timeout:
 
         return (
-            "⏱️ SERVER TIMEOUT\n"
-            "━━━━━━━━━━━━━━━━\n\n"
-            f"🔢 Resi: {resi}\n\n"
+            f"⚠️ RESI : {resi}\n"
+            "━━━━━━━━━━━━━━━━\n"
             "Server terlalu lama merespons."
         )
 
     except requests.exceptions.RequestException:
 
         return (
-            "❌ GAGAL TERHUBUNG KE SERVER\n"
-            "━━━━━━━━━━━━━━━━\n\n"
-            f"🔢 Resi: {resi}"
+            f"⚠️ RESI : {resi}\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Gagal terhubung ke server."
         )
 
     except Exception as error:
 
-        print("ERROR:", error)
+        print(
+            "ERROR:",
+            error
+        )
 
         return (
-            "❌ TERJADI KESALAHAN\n"
-            "━━━━━━━━━━━━━━━━\n\n"
-            f"🔢 Resi: {resi}\n\n"
-            f"{str(error)[:150]}"
+            f"⚠️ RESI : {resi}\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "Terjadi kesalahan saat mengambil data."
         )
 
 
-# ==================================================
-# AMBIL MAKSIMAL 50 RESI
-# ==================================================
+# =========================================================
+# AMBIL RESI
+# =========================================================
 
 def ambil_semua_resi(teks):
+
+    if not teks:
+        return []
 
     kandidat = re.split(
         r"[\s,;]+",
@@ -657,76 +510,82 @@ def ambil_semua_resi(teks):
 
     for item in kandidat:
 
+        item = item.strip()
+
+        if not item:
+            continue
+
         item = re.sub(
             r"[^A-Z0-9]",
             "",
             item
         )
 
-        if 8 <= len(item) <= 30:
+        # Harus mempunyai angka
+        if not re.search(
+            r"\d",
+            item
+        ):
+            continue
 
-            if item not in hasil:
-                hasil.append(item)
+        # Panjang resi
+        if not (
+            8 <= len(item) <= 30
+        ):
+            continue
+
+        if item not in hasil:
+            hasil.append(item)
 
     return hasil
 
 
-# ==================================================
+# =========================================================
 # TERIMA RESI
-# ==================================================
+# =========================================================
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(
+    func=lambda message: True
+)
 def terima_resi(message):
 
-    chat_id = message.chat.id
-
-    if chat_id not in user_courier:
-
-        bot.send_message(
-            chat_id,
-            "⚠️ Pilih ekspedisi terlebih dahulu:",
-            reply_markup=menu_ekspedisi()
-        )
-
-        return
-
-    courier = user_courier[chat_id]
+    teks = message.text or ""
 
     resi_list = ambil_semua_resi(
-        message.text or ""
+        teks
     )
 
     if not resi_list:
 
         bot.send_message(
-            chat_id,
-            "⚠️ Nomor resi tidak ditemukan."
+            message.chat.id,
+            "⚠️ Nomor resi tidak ditemukan.\n\n"
+            "Silakan kirim nomor resi SiCepat."
         )
 
         return
 
+    # Maksimal 50
     if len(resi_list) > 50:
 
         bot.send_message(
-            chat_id,
+            message.chat.id,
             f"⚠️ Maksimal 50 resi sekali cek.\n\n"
             f"Kamu mengirim {len(resi_list)} resi."
         )
 
         return
 
-    nama = (
-        "SiCepat"
-        if courier == "sicepat"
-        else "Ninja"
-    )
+    chat_id = message.chat.id
 
     bot.send_message(
         chat_id,
-        f"🔍 Mulai mengecek {len(resi_list)} resi {nama}.\n\n"
+        f"🔎 Mulai mengecek "
+        f"{len(resi_list)} resi SiCepat.\n\n"
         "⏳ Mohon tunggu..."
     )
 
+    # Proses satu per satu
     for nomor, resi in enumerate(
         resi_list,
         start=1
@@ -736,9 +595,8 @@ def terima_resi(message):
             f"Cek {nomor}/{len(resi_list)}: {resi}"
         )
 
-        hasil = lacak_resi(
-            resi,
-            courier
+        hasil = lacak_sicepat(
+            resi
         )
 
         try:
@@ -759,24 +617,24 @@ def terima_resi(message):
 
     bot.send_message(
         chat_id,
-        f"✅ Selesai mengecek {len(resi_list)} resi.",
-        reply_markup=menu_ekspedisi()
+        f"✅ Selesai mengecek "
+        f"{len(resi_list)} resi SiCepat."
     )
 
 
-# ==================================================
+# =========================================================
 # JALANKAN BOT
-# ==================================================
+# =========================================================
 
 if __name__ == "__main__":
 
     print("==============================")
-    print("📦 BOT TRACKING SICEPAT + NINJA")
-    print("🤖 BOT BERJALAN")
+    print("📦 BOT TRACKING SICEPAT")
+    print("✅ BOT BERJALAN")
     print("==============================")
 
     bot.infinity_polling(
         skip_pending=True,
         timeout=30,
         long_polling_timeout=30
-    )
+        )
