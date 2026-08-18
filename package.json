@@ -1,6 +1,7 @@
 {
   "name": "bot-lacak-paket-sicepat",
   "version": "1.0.0",
+  "description": "Telegram bot tracking SiCepat menggunakan BinderByte API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
