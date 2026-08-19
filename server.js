@@ -1,1093 +1,566 @@
-const express = require('express');
+const express = require("express");
 
 const app = express();
 app.use(express.json());
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = process.env.PORT || 3000;
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const BINDERBYTE_API_KEY = process.env.BINDERBYTE_API_KEY;
 
-const TELEGRAM_API = TELEGRAM_TOKEN
-  ? `https://api.telegram.org/bot${TELEGRAM_TOKEN}`
-  : '';
-
-const BINDERBYTE_API = 'https://api.binderbyte.com/v1/track';
-
 const waitingResi = new Set();
-let offset = 0;
-let pollingStarted = false;
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
 
 // =====================================================
-// TELEGRAM REQUEST
+// TELEGRAM
 // =====================================================
 
 async function telegram(method, body = {}) {
-
-    if (!TELEGRAM_TOKEN) {
-        throw new Error('TELEGRAM_TOKEN belum diisi');
-    }
-
-    const response = await fetch(
-        `${TELEGRAM_API}/${method}`,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(body)
-        }
-    );
-
-    const text = await response.text();
-
-    let data;
-
-    try {
-        data = JSON.parse(text);
-    } catch {
-        throw new Error(
-            `Telegram HTTP ${response.status}: ${text}`
-        );
-    }
-
-    return data;
+if (!TELEGRAM_TOKEN) {
+throw new Error("TELEGRAM_TOKEN belum tersedia.");
 }
 
+const response = await fetch(
+https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method},
+{
+method: "POST",
+headers: {
+"Content-Type": "application/json"
+},
+body: JSON.stringify(body)
+}
+);
+
+const json = await response.json();
+
+if (!response.ok) {
+throw new Error(
+Telegram HTTP ${response.status}: ${JSON.stringify(json)}
+);
+}
+
+return json;
+}
+
+async function sendMessage(chatId, text, keyboard = null) {
+const body = {
+chat_id: chatId,
+text: text
+};
+
+if (keyboard) {
+body.reply_markup = keyboard;
+}
+
+return telegram("sendMessage", body);
+}
 
 // =====================================================
-// MENU UTAMA
+// MENU
 // =====================================================
 
 function menuUtama() {
-
-    return {
-        keyboard: [
-            [
-                {
-                    text: '🔎 Cek Resi SiCepat'
-                }
-            ]
-        ],
-        resize_keyboard: true,
-        persistent: true
-    };
+return {
+keyboard: [
+[
+{
+text: "🔎 Cek Resi SiCepat"
+}
+]
+],
+resize_keyboard: true,
+persistent: true
+};
 }
 
-
 // =====================================================
-// ESCAPE HTML
-// =====================================================
-
-function escapeHtml(value) {
-
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-
-// =====================================================
-// KIRIM PESAN
+// CLEAN VALUE
 // =====================================================
 
-async function sendMessage(
-    chatId,
-    text,
-    keyboard = null
+function clean(value, fallback = "") {
+if (
+value === undefined ||
+value === null ||
+typeof value === "object"
 ) {
-
-    const body = {
-        chat_id: chatId,
-        text: text,
-        parse_mode: 'HTML'
-    };
-
-    if (keyboard) {
-        body.reply_markup = keyboard;
-    }
-
-    const result = await telegram(
-        'sendMessage',
-        body
-    );
-
-    if (!result.ok) {
-        console.error(
-            'sendMessage error:',
-            result
-        );
-    }
-
-    return result;
+return fallback;
 }
 
+const result = String(value).trim();
 
-// =====================================================
-// BERSIHKAN RESI
-// =====================================================
-
-function bersihkanResi(text) {
-
-    return String(text || '')
-        .replace(/[^0-9A-Za-z]/g, '')
-        .trim();
+return result || fallback;
 }
 
+// =====================================================
+// BINDERBYTE
+// =====================================================
+
+async function cekResiSiCepat(awb) {
+if (!BINDERBYTE_API_KEY) {
+throw new Error("BINDERBYTE_API_KEY belum tersedia.");
+}
+
+const params = new URLSearchParams({
+api_key: BINDERBYTE_API_KEY,
+courier: "sicepat",
+awb: awb
+});
+
+const url =
+https://api.binderbyte.com/v1/track?${params.toString()};
+
+const response = await fetch(url);
+
+let json;
+
+try {
+json = await response.json();
+} catch {
+throw new Error(
+Respons BinderByte tidak valid. HTTP ${response.status}
+);
+}
+
+console.log(
+"BINDERBYTE RESPONSE:",
+JSON.stringify(json, null, 2)
+);
+
+return {
+httpStatus: response.status,
+json
+};
+}
 
 // =====================================================
-// CARI FIELD PEMBAYARAN
+// SERVICE
+// HANYA DARI summary.service
 // =====================================================
 
-function cariFieldPembayaran(
-    obj,
-    path = '',
-    hasil = []
+function getService(data) {
+const rawService = clean(
+data?.summary?.service
+);
+
+if (!rawService) {
+return "DATA TIDAK TERSEDIA";
+}
+
+const service = rawService
+.toUpperCase()
+.replace(/\s+/g, "");
+
+if (
+service === "NONCOD" ||
+service === "NON-COD"
 ) {
-
-    if (
-        !obj ||
-        typeof obj !== 'object'
-    ) {
-        return hasil;
-    }
-
-    const kata = [
-        'payment',
-        'paystatus',
-        'paymethod',
-        'paytype',
-        'iscod',
-        'codstatus',
-        'codamount',
-        'codvalue',
-        'cashondelivery'
-    ];
-
-    for (
-        const [key, value]
-        of Object.entries(obj)
-    ) {
-
-        const keyNormal =
-            key
-                .toLowerCase()
-                .replace(/[\s_-]/g, '');
-
-        const currentPath =
-            path
-                ? `${path}.${key}`
-                : key;
-
-        if (
-            kata.some(word =>
-                keyNormal.includes(word)
-            ) &&
-            value !== null &&
-            typeof value !== 'object'
-        ) {
-
-            hasil.push({
-                key: keyNormal,
-                path: currentPath,
-                value: String(value).trim()
-            });
-        }
-
-        if (
-            value &&
-            typeof value === 'object'
-        ) {
-
-            cariFieldPembayaran(
-                value,
-                currentPath,
-                hasil
-            );
-        }
-    }
-
-    return hasil;
+return "NON-COD";
 }
 
-
-// =====================================================
-// DETEKSI COD / NONCOD
-// =====================================================
-
-function deteksiPembayaran(data) {
-
-    const fields =
-        cariFieldPembayaran(data);
-
-    console.log(
-        'FIELD PEMBAYARAN:',
-        JSON.stringify(
-            fields,
-            null,
-            2
-        )
-    );
-
-
-    // IS COD
-
-    for (const field of fields) {
-
-        const value =
-            field.value
-                .toLowerCase()
-                .trim();
-
-        if (
-            field.key.includes('iscod')
-        ) {
-
-            if (
-                [
-                    'true',
-                    '1',
-                    'yes',
-                    'y'
-                ].includes(value)
-            ) {
-
-                return {
-                    status: 'COD',
-                    nominal: ''
-                };
-            }
-
-            if (
-                [
-                    'false',
-                    '0',
-                    'no',
-                    'n'
-                ].includes(value)
-            ) {
-
-                return {
-                    status: 'NONCOD',
-                    nominal: ''
-                };
-            }
-        }
-    }
-
-
-    // PAYMENT TYPE / STATUS
-
-    for (const field of fields) {
-
-        const value =
-            field.value
-                .toLowerCase()
-                .trim();
-
-        if (
-            value.includes('non cod') ||
-            value.includes('non-cod') ||
-            value.includes('noncod')
-        ) {
-
-            return {
-                status: 'NONCOD',
-                nominal: ''
-            };
-        }
-
-        if (
-            value === 'cod' ||
-            value.includes(
-                'cash on delivery'
-            )
-        ) {
-
-            return {
-                status: 'COD',
-                nominal: ''
-            };
-        }
-    }
-
-
-    // NOMINAL COD
-
-    for (const field of fields) {
-
-        if (
-            field.key.includes(
-                'codamount'
-            ) ||
-            field.key.includes(
-                'codvalue'
-            )
-        ) {
-
-            const nominal =
-                Number(
-                    field.value.replace(
-                        /[^0-9]/g,
-                        ''
-                    )
-                );
-
-            if (
-                Number.isFinite(nominal) &&
-                nominal > 0
-            ) {
-
-                return {
-                    status: 'COD',
-                    nominal: nominal
-                };
-            }
-        }
-    }
-
-
-    // JANGAN MENEBak DARI SERVICE REG/BEST
-
-    return {
-        status: 'DATA TIDAK TERSEDIA',
-        nominal: ''
-    };
+if (service === "COD") {
+return "COD";
 }
 
-
-// =====================================================
-// FORMAT RUPIAH
-// =====================================================
-
-function formatRupiah(value) {
-
-    const number =
-        Number(value);
-
-    if (
-        !Number.isFinite(number)
-    ) {
-        return String(
-            value ?? ''
-        );
-    }
-
-    return number.toLocaleString(
-        'id-ID'
-    );
+// Kalau API mengirim nama service lain,
+// tampilkan sesuai data API.
+return rawService;
 }
 
+// =====================================================
+// STATUS
+// =====================================================
+
+function getStatus(data) {
+const summary = data?.summary || {};
+
+const history = Array.isArray(data?.history)
+? data.history
+: [];
+
+// Prioritas 1: summary.status
+let status = clean(summary.status);
+
+if (status) {
+return status;
+}
+
+// Prioritas 2: status history terbaru
+if (history.length > 0) {
+const latest = history[0];
+
+status = clean(  
+  latest?.status ||  
+  latest?.Status  
+);  
+
+if (status) {  
+  return status;  
+}  
+
+// Prioritas 3: keterangan history terbaru  
+status = clean(  
+  latest?.desc ||  
+  latest?.description  
+);  
+
+if (status) {  
+  return status;  
+}
+
+}
+
+return "STATUS TIDAK TERSEDIA";
+}
 
 // =====================================================
 // FORMAT TRACKING
 // =====================================================
 
-function formatTracking(
-    data,
-    requestedResi
-) {
+function formatTracking(data, inputAwb) {
+const summary = data?.summary || {};
+const detail = data?.detail || {};
 
-    const summary =
-        data.summary || {};
+const history = Array.isArray(data?.history)
+? data.history
+: [];
 
-    const detail =
-        data.detail || {};
+const awb = clean(
+summary.awb,
+inputAwb
+);
 
-    const history =
-        Array.isArray(data.history)
-            ? data.history
-            : [];
+const courier = clean(
+summary.courier,
+"SiCepat Express"
+);
 
-    const pembayaran =
-        deteksiPembayaran(data);
+const service = getService(data);
 
-    let text =
-        '📦 <b>TRACKING SICEPAT</b>\n';
+const status = getStatus(data);
 
-    text +=
-        '━━━━━━━━━━━━━━━━━━━━\n\n';
+const shipper = clean(
+detail.shipper,
+"DATA TIDAK TERSEDIA"
+);
 
+const receiver = clean(
+detail.receiver,
+"DATA TIDAK TERSEDIA"
+);
 
-    // RESI
+const origin = clean(
+detail.origin,
+"DATA TIDAK TERSEDIA"
+);
 
-    text +=
-        '📨 <b>RESI</b>\n';
+const destination = clean(
+detail.destination,
+"DATA TIDAK TERSEDIA"
+);
 
-    text +=
-        `└ No Resi : <code>${
-            escapeHtml(
-                summary.awb ||
-                requestedResi
-            )
-        }</code>\n`;
+let text = "";
 
-    text +=
-        `└ Service : ${
-            escapeHtml(
-                summary.service ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
+text += "📦 EXPEDISI SICEPAT\n";
+text += └ ${courier}\n\n;
 
+text += "📩 RESI\n";
+text += ├ Service : ${service}\n;
+text += └ No Resi : ${awb}\n\n;
 
-    // STATUS
+text += "📮 STATUS TERBARU\n";
+text += └ ${status}\n\n;
 
-    text +=
-        '🚩 <b>STATUS TERBARU</b>\n';
+text += "🚀 PENGIRIM\n";
+text += ├ ${shipper}\n;
+text += └ ${origin}\n\n;
 
-    text +=
-        `└ ${
-            escapeHtml(
-                summary.status ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
+text += "🚩 PENERIMA\n";
+text += ├ ${receiver}\n;
+text += └ ${destination}\n\n;
 
+text += "📍 RIWAYAT PENGIRIMAN\n";
 
-    // PENGIRIM
+if (history.length === 0) {
+text += "└ DATA RIWAYAT TIDAK TERSEDIA\n";
+} else {
+history.forEach((item, index) => {
+const date = clean(
+item?.date ||
+item?.datetime,
+"Tanggal tidak tersedia"
+);
 
-    text +=
-        '🚀 <b>PENGIRIM</b>\n';
+const desc = clean(  
+    item?.desc ||  
+    item?.description,  
+    "Keterangan tidak tersedia"  
+  );  
 
-    text +=
-        `└ ${
-            escapeHtml(
-                detail.shipper ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
+  const location = clean(  
+    item?.location,  
+    "Lokasi tidak tersedia"  
+  );  
 
+  text += `\n${index + 1}. ${date}\n`;  
+  text += `├ ${desc}\n`;  
+  text += `└ 📍 ${location}\n`;  
+});
 
-    // PENERIMA
-
-    text +=
-        '🏁 <b>PENERIMA</b>\n';
-
-    text +=
-        `└ ${
-            escapeHtml(
-                detail.receiver ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
-
-
-    // RUTE
-
-    text +=
-        '📍 <b>RUTE</b>\n';
-
-    text +=
-        `└ Asal : ${
-            escapeHtml(
-                detail.origin ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n`;
-
-    text +=
-        `└ Tujuan : ${
-            escapeHtml(
-                detail.destination ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
-
-
-    // PEMBAYARAN
-
-    text +=
-        '💰 <b>PEMBAYARAN</b>\n';
-
-    text +=
-        `└ ${
-            escapeHtml(
-                pembayaran.status
-            )
-        }\n`;
-
-    if (
-        pembayaran.nominal
-    ) {
-
-        text +=
-            `└ Nominal COD : Rp${
-                escapeHtml(
-                    formatRupiah(
-                        pembayaran.nominal
-                    )
-                )
-            }\n`;
-    }
-
-    text += '\n';
-
-
-    // TANGGAL
-
-    text +=
-        '📅 <b>TANGGAL</b>\n';
-
-    text +=
-        `└ ${
-            escapeHtml(
-                summary.date ||
-                'DATA TIDAK TERSEDIA'
-            )
-        }\n\n`;
-
-
-    // RIWAYAT
-
-    text +=
-        '📌 <b>RIWAYAT PENGIRIMAN</b>\n';
-
-    if (
-        !history.length
-    ) {
-
-        text +=
-            '└ Data riwayat tidak tersedia\n';
-
-    } else {
-
-        history.forEach(
-            (item, index) => {
-
-                text +=
-                    `\n<b>${index + 1}. ${
-                        escapeHtml(
-                            item.date ||
-                            '-'
-                        )
-                    }</b>\n`;
-
-                text +=
-                    `└ ${
-                        escapeHtml(
-                            item.desc ||
-                            '-'
-                        )
-                    }\n`;
-
-                if (
-                    item.location
-                ) {
-
-                    text +=
-                        `└ 📍 ${
-                            escapeHtml(
-                                item.location
-                            )
-                        }\n`;
-                }
-            }
-        );
-    }
-
-    return text;
 }
 
-
-// =====================================================
-// CEK RESI BINDERBYTE
-// =====================================================
-
-async function cekResiSiCepat(
-    resi
-) {
-
-    if (
-        !BINDERBYTE_API_KEY
-    ) {
-
-        throw new Error(
-            'BINDERBYTE_API_KEY belum diisi'
-        );
-    }
-
-    const url =
-        `${BINDERBYTE_API}` +
-        `?api_key=${encodeURIComponent(
-            BINDERBYTE_API_KEY
-        )}` +
-        `&courier=sicepat` +
-        `&awb=${encodeURIComponent(
-            resi
-        )}`;
-
-    console.log(
-        'Mengecek BinderByte:',
-        resi
-    );
-
-    const response =
-        await fetch(url);
-
-    const text =
-        await response.text();
-
-    let result;
-
-    try {
-
-        result =
-            JSON.parse(text);
-
-    } catch {
-
-        throw new Error(
-            `BinderByte HTTP ${
-                response.status
-            }: ${text}`
-        );
-    }
-
-    console.log(
-        'HASIL BINDERBYTE:',
-        JSON.stringify(
-            result,
-            null,
-            2
-        )
-    );
-
-    return result;
+return text;
 }
-
 
 // =====================================================
 // PROSES RESI
 // =====================================================
 
-async function prosesResi(
-    chatId,
-    resi
-) {
-
-    await sendMessage(
-        chatId,
-        `🔎 Sedang mengecek resi SiCepat:\n<code>${
-            escapeHtml(resi)
-        }</code>\n\nMohon tunggu...`
-    );
-
-    try {
-
-        const result =
-            await cekResiSiCepat(
-                resi
-            );
-
-        if (
-            !result ||
-            Number(result.status) !== 200 ||
-            !result.data ||
-            !result.data.summary ||
-            !result.data.summary.awb
-        ) {
-
-            await sendMessage(
-                chatId,
-                `❌ <b>RESI TIDAK DITEMUKAN</b>\n\n${
-                    escapeHtml(
-                        result?.message ||
-                        'Data tracking tidak tersedia.'
-                    )
-                }`,
-                menuUtama()
-            );
-
-            return;
-        }
-
-        await sendMessage(
-            chatId,
-            formatTracking(
-                result.data,
-                resi
-            ),
-            menuUtama()
-        );
-
-    } catch (error) {
-
-        console.error(
-            'ERROR CEK RESI:',
-            error
-        );
-
-        await sendMessage(
-            chatId,
-            '❌ Terjadi kesalahan saat menghubungi server tracking.\n\nSilakan coba lagi.',
-            menuUtama()
-        );
-    }
-}
-
-
-// =====================================================
-// PROSES PESAN TELEGRAM
-// =====================================================
-
-async function handleMessage(
-    message
-) {
-
-    if (
-        !message ||
-        !message.chat
-    ) {
-        return;
-    }
-
-    const chatId =
-        message.chat.id;
-
-    const text =
-        String(
-            message.text || ''
-        ).trim();
-
-    console.log(
-        '📩 PESAN TELEGRAM:',
-        chatId,
-        JSON.stringify(text)
-    );
-
-
-    // START
-
-    if (
-        text === '/start'
-    ) {
-
-        waitingResi.delete(
-            chatId
-        );
-
-        await sendMessage(
-            chatId,
-            '👋 <b>Selamat datang!</b>\n\nSilakan pilih menu di bawah untuk melakukan pengecekan resi SiCepat.',
-            menuUtama()
-        );
-
-        return;
-    }
-
-
-    // TOMBOL CEK RESI
-
-    if (
-        text ===
-            '🔎 Cek Resi SiCepat' ||
-        text === '/cekresi'
-    ) {
-
-        waitingResi.add(
-            chatId
-        );
-
-        await sendMessage(
-            chatId,
-            '📦 <b>CEK RESI SICEPAT</b>\n\nSilakan kirim nomor resi SiCepat kamu.\n\nContoh:\n<code>004646985892</code>',
-            menuUtama()
-        );
-
-        return;
-    }
-
-
-    // USER MENGIRIM RESI
-
-    if (
-        waitingResi.has(
-            chatId
-        )
-    ) {
-
-        const resi =
-            bersihkanResi(
-                text
-            );
-
-        if (
-            !resi
-        ) {
-
-            await sendMessage(
-                chatId,
-                '❌ Nomor resi tidak terbaca.\n\nSilakan kirim nomor resi yang benar.',
-                menuUtama()
-            );
-
-            return;
-        }
-
-        waitingResi.delete(
-            chatId
-        );
-
-        await prosesResi(
-            chatId,
-            resi
-        );
-
-        return;
-    }
-
-
-    // LANGSUNG KIRIM RESI
-
-    const kemungkinanResi =
-        bersihkanResi(
-            text
-        );
-
-    if (
-        /^[0-9A-Za-z]{8,30}$/.test(
-            kemungkinanResi
-        )
-    ) {
-
-        await prosesResi(
-            chatId,
-            kemungkinanResi
-        );
-
-        return;
-    }
-
-
-    await sendMessage(
-        chatId,
-        'Silakan tekan tombol <b>🔎 Cek Resi SiCepat</b> terlebih dahulu.',
-        menuUtama()
-    );
-}
-
-
-// =====================================================
-// POLLING TELEGRAM
-// =====================================================
-
-async function pollingTelegram() {
-
-    if (
-        pollingStarted
-    ) {
-        return;
-    }
-
-    pollingStarted = true;
-
-    console.log(
-        '🔄 POLLING TELEGRAM DIMULAI'
-    );
-
-    while (true) {
-
-        try {
-
-            const result =
-                await telegram(
-                    'getUpdates',
-                    {
-                        offset: offset,
-                        timeout: 30,
-                        allowed_updates: [
-                            'message'
-                        ]
-                    }
-                );
-
-            if (
-                !result.ok
-            ) {
-
-                console.error(
-                    'Telegram getUpdates error:',
-                    result
-                );
-
-                await sleep(
-                    5000
-                );
-
-                continue;
-            }
-
-            for (
-                const update
-                of result.result || []
-            ) {
-
-                offset =
-                    update.update_id + 1;
-
-                try {
-
-                    await handleMessage(
-                        update.message
-                    );
-
-                } catch (error) {
-
-                    console.error(
-                        'HANDLE MESSAGE ERROR:',
-                        error
-                    );
-                }
-            }
-
-        } catch (error) {
-
-            console.error(
-                'POLLING ERROR:',
-                error
-            );
-
-            await sleep(
-                5000
-            );
-        }
-    }
-}
-
-
-// =====================================================
-// START BOT
-// =====================================================
-
-async function startBot() {
-
-    console.log(
-        '🚀 MEMULAI BOT SICEPAT'
-    );
-
-    console.log(
-        'TELEGRAM_TOKEN:',
-        TELEGRAM_TOKEN
-            ? 'ADA'
-            : 'TIDAK ADA'
-    );
-
-    console.log(
-        'BINDERBYTE_API_KEY:',
-        BINDERBYTE_API_KEY
-            ? 'ADA'
-            : 'TIDAK ADA'
-    );
-
-
-    if (
-        !TELEGRAM_TOKEN ||
-        !BINDERBYTE_API_KEY
-    ) {
-
-        console.error(
-            '❌ Environment variable belum lengkap. Cek TELEGRAM_TOKEN dan BINDERBYTE_API_KEY di Railway Variables.'
-        );
-
-        return;
-    }
-
-
-    try {
-
-        // Hapus webhook agar polling bisa berjalan.
-
-        const webhook =
-            await telegram(
-                'deleteWebhook',
-                {
-                    drop_pending_updates: false
-                }
-            );
-
-        console.log(
-            'DELETE WEBHOOK:',
-            JSON.stringify(
-                webhook
-            )
-        );
-
-
-        // Tes token Telegram.
-
-        const me =
-            await telegram(
-                'getMe'
-            );
-
-        console.log(
-            'GET ME:',
-            JSON.stringify(
-                me
-            )
-        );
-
-
-        if (
-            !me.ok
-        ) {
-
-            console.error(
-                '❌ TELEGRAM_TOKEN tidak valid atau bot tidak dapat diakses.'
-            );
-
-            return;
-        }
-
-
-        console.log(
-            `✅ BOT AKTIF: @${me.result.username}`
-        );
-
-
-        await pollingTelegram();
-
-    } catch (error) {
-
-        console.error(
-            'START BOT ERROR:',
-            error
-        );
-    }
-}
-
-
-// =====================================================
-// RAILWAY HEALTH CHECK
-// =====================================================
-
-app.get(
-    '/',
-    (req, res) => {
-
-        res.json({
-            status: 'online',
-
-            bot:
-                'Telegram SiCepat Tracking',
-
-            telegram:
-                TELEGRAM_TOKEN
-                    ? 'configured'
-                    : 'not configured',
-
-            binderbyte:
-                BINDERBYTE_API_KEY
-                    ? 'configured'
-                    : 'not configured'
-        });
-    }
+async function prosesResi(chatId, awb) {
+awb = String(awb || "")
+.replace(/\s+/g, "")
+.trim();
+
+if (!awb) {
+await sendMessage(
+chatId,
+"❌ Nomor resi belum dikirim.",
+menuUtama()
 );
 
+return;
+
+}
+
+await sendMessage(
+chatId,
+🔎 Sedang mengecek resi SiCepat:\n${awb}\n\nMohon tunggu...
+);
+
+try {
+const response = await cekResiSiCepat(awb);
+const result = response.json;
+
+if (  
+  response.httpStatus !== 200 ||  
+  !result ||  
+  Number(result.status) !== 200  
+) {  
+  await sendMessage(  
+    chatId,  
+    "❌ Gagal mengambil data tracking.\n\n" +  
+    `Resi : ${awb}\n` +  
+    `Status API : ${  
+      result?.status ?? response.httpStatus  
+    }\n` +  
+    `Pesan : ${  
+      result?.message ||  
+      "Silakan coba lagi."  
+    }`,  
+    menuUtama()  
+  );  
+
+  return;  
+}  
+
+if (  
+  !result.data ||  
+  typeof result.data !== "object"  
+) {  
+  await sendMessage(  
+    chatId,  
+    "❌ Data resi tidak ditemukan.",  
+    menuUtama()  
+  );  
+
+  return;  
+}  
+
+const hasil = formatTracking(  
+  result.data,  
+  awb  
+);  
+
+await sendMessage(  
+  chatId,  
+  hasil,  
+  menuUtama()  
+);
+
+} catch (error) {
+console.error(
+"TRACKING ERROR:",
+error.message || error
+);
+
+await sendMessage(  
+  chatId,  
+  "❌ Terjadi kesalahan saat mengambil data tracking.\n\n" +  
+  "Silakan coba lagi.",  
+  menuUtama()  
+);
+
+}
+}
 
 // =====================================================
-// J
+// TELEGRAM POLLING
+// =====================================================
+
+let offset = 0;
+let pollingRunning = false;
+
+async function pollingTelegram() {
+if (pollingRunning) {
+return;
+}
+
+pollingRunning = true;
+
+try {
+const response = await telegram(
+"getUpdates",
+{
+offset: offset,
+timeout: 30,
+allowed_updates: ["message"]
+}
+);
+
+if (  
+  !response.ok ||  
+  !Array.isArray(response.result)  
+) {  
+  return;  
+}  
+
+for (const update of response.result) {  
+  offset = update.update_id + 1;  
+
+  const message = update.message;  
+
+  if (!message || !message.text) {  
+    continue;  
+  }  
+
+  const chatId = message.chat.id;  
+  const text = message.text.trim();  
+
+  // START  
+  if (text === "/start") {  
+    waitingResi.delete(chatId);  
+
+    await sendMessage(  
+      chatId,  
+      "👋 Selamat datang.\n\n" +  
+      "Silakan tekan tombol di bawah untuk cek resi SiCepat.",  
+      menuUtama()  
+    );  
+
+    continue;  
+  }  
+
+  // TOMBOL CEK RESI  
+  if (  
+    text === "🔎 Cek Resi SiCepat"  
+  ) {  
+    waitingResi.add(chatId);  
+
+    await sendMessage(  
+      chatId,  
+      "📩 Silakan kirim nomor resi SiCepat.\n\n" +  
+      "Contoh:\n" +  
+      "004646985892\n\n" +  
+      "Kirim nomor resi saja.",  
+      menuUtama()  
+    );  
+
+    continue;  
+  }  
+
+  // MENUNGGU RESI  
+  if (waitingResi.has(chatId)) {  
+    waitingResi.delete(chatId);  
+
+    await prosesResi(  
+      chatId,  
+      text  
+    );  
+
+    continue;  
+  }  
+
+  // /LACAK  
+  if (  
+    text.toLowerCase().startsWith("/lacak")  
+  ) {  
+    const parts = text.split(/\s+/);  
+
+    const awb = parts  
+      .slice(1)  
+      .join("");  
+
+    await prosesResi(  
+      chatId,  
+      awb  
+    );  
+
+    continue;  
+  }  
+}
+
+} catch (error) {
+console.error(
+"POLLING ERROR:",
+error.message || error
+);
+} finally {
+pollingRunning = false;
+}
+}
+
+// =====================================================
+// SERVER
+// =====================================================
+
+app.get("/", (req, res) => {
+res.json({
+success: true,
+message: "Bot Tracking SiCepat aktif"
+});
+});
+
+app.listen(PORT, () => {
+console.log(
+Server aktif di port ${PORT}
+);
+
+console.log(
+"TELEGRAM_TOKEN:",
+TELEGRAM_TOKEN
+? "ADA"
+: "TIDAK ADA"
+);
+
+console.log(
+"BINDERBYTE_API_KEY:",
+BINDERBYTE_API_KEY
+? "ADA"
+: "TIDAK ADA"
+);
+
+if (
+TELEGRAM_TOKEN &&
+BINDERBYTE_API_KEY
+) {
+pollingTelegram();
+
+setInterval(  
+  pollingTelegram,  
+  1000  
+);
+
+} else {
+console.error(
+"Environment variable belum lengkap."
+);
+}
+});
