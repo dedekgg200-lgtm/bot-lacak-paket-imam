@@ -1,16 +1,16 @@
 {
-  "name": "bot-tracking-biteship",
+  "name": "telegram-sicepat-biteship",
   "version": "1.0.0",
-  "description": "Bot Pelacak Resi SiCepat Biteship COD/POD",
-  "main": "bot.js",
+  "description": "Telegram bot tracking SiCepat menggunakan Biteship",
+  "main": "server.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.0",
-    "grammy": "^1.20.0"
+    "express": "^4.21.2",
+    "grammy": "^1.37.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18"
   }
 }
