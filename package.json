@@ -1,12 +1,16 @@
 {
-  "name": "bot-lacak-paket-sicepat",
+  "name": "bot-tracking-biteship",
   "version": "1.0.0",
-  "description": "Telegram bot tracking SiCepat menggunakan BinderByte API",
-  "main": "server.js",
+  "description": "Bot Pelacak Resi SiCepat Biteship COD/POD",
+  "main": "bot.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "axios": "^1.7.0",
+    "grammy": "^1.20.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
