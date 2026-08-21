@@ -6,7 +6,6 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
     "grammy": "^1.38.0"
   }
 }
