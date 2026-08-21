@@ -316,29 +316,22 @@ function formatTracking(data, inputAwb) {
 
 
 // =====================================================
-// PROSES RESI
+// PROSES SATU RESI
 // =====================================================
 
-async function prosesResi(chatId, awb) {
+async function prosesSatuResi(chatId, awb) {
 
   awb = String(awb || "")
     .replace(/\s+/g, "")
     .trim();
 
   if (!awb) {
-
-    await sendMessage(
-      chatId,
-      "❌ Nomor resi belum dikirim.",
-      menuUtama()
-    );
-
     return;
   }
 
   await sendMessage(
     chatId,
-    `🔎 Sedang mengecek resi SiCepat:\n${awb}\n\nMohon tunggu...`
+    `🔎 Mengecek resi:\n${awb}\n\nMohon tunggu...`
   );
 
   try {
@@ -348,11 +341,6 @@ async function prosesResi(chatId, awb) {
 
     const result =
       response.json;
-
-    console.log(
-      "HASIL API:",
-      JSON.stringify(result, null, 2)
-    );
 
     if (
       response.httpStatus !== 200 ||
@@ -365,15 +353,10 @@ async function prosesResi(chatId, awb) {
 
         "❌ Gagal mengambil data tracking.\n\n" +
         `Resi : ${awb}\n` +
-        `Status API : ${
-          result?.status ?? response.httpStatus
-        }\n` +
         `Pesan : ${
           result?.message ||
-          "Silakan coba lagi."
-        }`,
-
-        menuUtama()
+          "Resi tidak ditemukan."
+        }`
       );
 
       return;
@@ -386,8 +369,7 @@ async function prosesResi(chatId, awb) {
 
       await sendMessage(
         chatId,
-        "❌ Data resi tidak ditemukan.",
-        menuUtama()
+        `❌ Data resi ${awb} tidak ditemukan.`
       );
 
       return;
@@ -401,8 +383,7 @@ async function prosesResi(chatId, awb) {
 
     await sendMessage(
       chatId,
-      hasil,
-      menuUtama()
+      hasil
     );
 
   } catch (error) {
@@ -414,13 +395,56 @@ async function prosesResi(chatId, awb) {
 
     await sendMessage(
       chatId,
-
-      "❌ Terjadi kesalahan saat mengambil data tracking.\n\n" +
-      "Silakan coba lagi.",
-
-      menuUtama()
+      `❌ Gagal mengecek resi ${awb}.\n\nSilakan coba lagi.`
     );
   }
+}
+
+
+// =====================================================
+// PROSES BANYAK RESI
+// =====================================================
+
+async function prosesBanyakResi(chatId, text) {
+
+  const resiList = text
+    .split(/\r?\n/)
+    .map((item) =>
+      item.replace(/[\s,]+/g, "").trim()
+    )
+    .filter((item) => item.length > 0);
+
+  // Hilangkan nomor yang sama
+  const unik = [...new Set(resiList)];
+
+  if (unik.length > 50) {
+
+    await sendMessage(
+      chatId,
+      "❌ Maksimal 50 resi sekali kirim."
+    );
+
+    return;
+  }
+
+  for (const resi of unik) {
+
+    await prosesSatuResi(
+      chatId,
+      resi
+    );
+
+    // Jeda supaya request berjalan satu per satu
+    await new Promise((resolve) =>
+      setTimeout(resolve, 1000)
+    );
+  }
+
+  await sendMessage(
+    chatId,
+    "✅ Semua resi selesai dicek.",
+    menuUtama()
+  );
 }
 
 
@@ -492,19 +516,16 @@ async function pollingTelegram() {
       // START
       // =================================================
 
-      if (
-        text === "/start"
-      ) {
+      if (text === "/start") {
 
-        waitingResi.delete(
-          chatId
-        );
+        waitingResi.delete(chatId);
 
         await sendMessage(
           chatId,
 
           "👋 Selamat datang.\n\n" +
-          "Silakan tekan tombol di bawah untuk cek resi SiCepat.",
+          "Silakan tekan tombol di bawah untuk cek resi SiCepat.\n\n" +
+          "💡 Bisa kirim 1 resi atau beberapa resi sekaligus.",
 
           menuUtama()
         );
@@ -521,17 +542,18 @@ async function pollingTelegram() {
         text === "🔎 Cek Resi SiCepat"
       ) {
 
-        waitingResi.add(
-          chatId
-        );
+        waitingResi.add(chatId);
 
         await sendMessage(
           chatId,
 
           "📩 Silakan kirim nomor resi SiCepat.\n\n" +
+          "Bisa 1 resi atau banyak resi.\n\n" +
           "Contoh:\n" +
-          "004646985892\n\n" +
-          "Kirim nomor resi saja.",
+          "004646985892\n" +
+          "004646985893\n" +
+          "004646985894\n\n" +
+          "Maksimal 50 resi.",
 
           menuUtama()
         );
@@ -548,11 +570,9 @@ async function pollingTelegram() {
         waitingResi.has(chatId)
       ) {
 
-        waitingResi.delete(
-          chatId
-        );
+        waitingResi.delete(chatId);
 
-        await prosesResi(
+        await prosesBanyakResi(
           chatId,
           text
         );
@@ -571,17 +591,25 @@ async function pollingTelegram() {
           .startsWith("/lacak")
       ) {
 
-        const parts =
-          text.split(/\s+/);
+        const resiText =
+          text
+            .substring(6)
+            .trim();
 
-        const awb =
-          parts
-            .slice(1)
-            .join("");
+        if (!resiText) {
 
-        await prosesResi(
+          await sendMessage(
+            chatId,
+            "❌ Contoh:\n/lacak 004646985892",
+            menuUtama()
+          );
+
+          continue;
+        }
+
+        await prosesBanyakResi(
           chatId,
-          awb
+          resiText
         );
 
         continue;
@@ -611,11 +639,9 @@ app.get(
   (req, res) => {
 
     res.json({
-
       success: true,
-
       message:
-        "Bot Tracking SiCepat aktif"
+        "Bot Tracking SiCepat BinderByte aktif"
     });
   }
 );
