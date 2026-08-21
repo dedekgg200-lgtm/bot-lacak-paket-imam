@@ -3,13 +3,39 @@ const { Bot } = require("grammy");
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 const API_KEY = process.env.BITESHIP_TOKEN;
 
+// ==========================
+// START
+// ==========================
+
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    "👋 Bot aktif.\n\nKirim nomor resi SiCepat."
+    "👋 Bot Tracking SiCepat aktif.\n\n" +
+    "Kirim nomor resi SiCepat."
   );
 });
 
+// ==========================
+// SENSOR NAMA
+// ==========================
+
+function sensorNama(nama) {
+  if (!nama || nama === "-") return "-";
+
+  nama = String(nama).trim();
+
+  if (nama.length <= 2) {
+    return nama.charAt(0) + "***";
+  }
+
+  return nama.substring(0, 2) + "***";
+}
+
+// ==========================
+// TRACKING
+// ==========================
+
 bot.on("message:text", async (ctx) => {
+
   const resi = ctx.message.text.trim();
 
   if (resi.startsWith("/")) return;
@@ -21,16 +47,17 @@ bot.on("message:text", async (ctx) => {
   await ctx.reply("🔎 Mengecek resi...");
 
   try {
-    // =================================
-    // 1. CEK PUBLIC TRACKING
-    // =================================
+
+    // ==========================
+    // PUBLIC TRACKING
+    // ==========================
 
     const trackingUrl =
       "https://api.biteship.com/v1/trackings/" +
       encodeURIComponent(resi) +
       "/couriers/sicepat";
 
-    const trackingResponse = await fetch(trackingUrl, {
+    const response = await fetch(trackingUrl, {
       method: "GET",
       headers: {
         "Authorization": API_KEY,
@@ -38,106 +65,117 @@ bot.on("message:text", async (ctx) => {
       }
     });
 
-    const tracking = await trackingResponse.json();
+    const data = await response.json();
 
-    console.log(
-      "TRACKING:",
-      JSON.stringify(tracking, null, 2)
-    );
+    console.log("========== TRACKING ==========");
+    console.log(JSON.stringify(data, null, 2));
+    console.log("==============================");
 
-    if (!trackingResponse.ok) {
+    if (!response.ok) {
       return ctx.reply(
         "❌ Gagal cek resi.\n\n" +
-        "HTTP: " +
-        trackingResponse.status +
-        "\n" +
+        "HTTP: " + response.status + "\n" +
         "Pesan: " +
-        (tracking.message || "Tidak tersedia")
+        (data.message || "Tidak tersedia")
       );
     }
 
-    // =================================
-    // 2. SERVICE
-    // =================================
+    // ==========================
+    // RESI
+    // ==========================
 
-    const service =
-      tracking.service ||
-      tracking.courier?.type ||
-      tracking.history?.[0]?.service_type ||
+    const nomorResi =
+      data.waybill_id ||
+      resi;
+
+    // ==========================
+    // KURIR
+    // ==========================
+
+    const courier =
+      data.courier?.company ||
       "SiCepat";
 
-    // =================================
-    // 3. CARI ORDER ID
-    // =================================
+    // ==========================
+    // SERVICE
+    // ==========================
 
-    const orderId =
-      tracking.order_id ||
-      tracking.orderId ||
-      null;
+    const service =
+      data.courier?.type ||
+      data.courier?.service ||
+      data.service ||
+      data.history?.[0]?.service_type ||
+      "-";
+
+    // ==========================
+    // PENERIMA
+    // ==========================
+
+    const nama =
+      data.destination?.contact_name ||
+      data.receiver?.name ||
+      data.recipient ||
+      "-";
+
+    const namaSensor =
+      sensorNama(nama);
+
+    // ==========================
+    // STATUS
+    // ==========================
+
+    const status =
+      data.status ||
+      data.tracking_status ||
+      "-";
+
+    // ==========================
+    // PEMBAYARAN
+    // ==========================
 
     let pembayaran = "Tidak diketahui";
 
-    // =================================
-    // 4. JIKA ADA ORDER ID,
-    //    CEK DETAIL ORDER
-    // =================================
+    /*
+      Jangan menebak COD dari status paket.
 
-    if (orderId) {
+      Hanya baca kalau API benar-benar
+      memberikan informasi pembayaran.
+    */
 
-      console.log(
-        "ORDER ID DITEMUKAN:",
-        orderId
-      );
+    const paymentType =
+      data.payment_type ||
+      data.payment?.type ||
+      data.payment?.payment_type ||
+      null;
 
-      const orderUrl =
-        "https://api.biteship.com/v1/orders/" +
-        encodeURIComponent(orderId);
+    if (paymentType === "cod") {
 
-      const orderResponse = await fetch(orderUrl, {
-        method: "GET",
-        headers: {
-          "Authorization": API_KEY,
-          "Content-Type": "application/json"
-        }
-      });
+      pembayaran = "COD";
 
-      const order = await orderResponse.json();
+    } else if (
+      paymentType === "prepaid" ||
+      paymentType === "postpaid"
+    ) {
 
-      console.log(
-        "ORDER RESPONSE:",
-        JSON.stringify(order, null, 2)
-      );
-
-      if (orderResponse.ok) {
-
-        const cod =
-          order.destination?.cash_on_delivery ||
-          order.cash_on_delivery ||
-          null;
-
-        if (cod) {
-          pembayaran = "COD";
-        } else {
-          pembayaran = "NON-COD";
-        }
-      }
+      pembayaran = "NON-COD";
     }
 
-    // =================================
-    // 5. HASIL
-    // =================================
+    // ==========================
+    // HASIL
+    // ==========================
 
-    await ctx.reply(
-      "📦 HASIL PAKET\n\n" +
-      "📮 Resi: " +
-      resi +
-      "\n" +
-      "🚚 Service: " +
-      service +
-      "\n" +
-      "💰 Pembayaran: " +
-      pembayaran
-    );
+    let pesan =
+      "📦 HASIL PAKET\n" +
+      "━━━━━━━━━━━━━━━━━━\n" +
+      "📮 Resi: " + nomorResi + "\n" +
+      "🚚 Kurir: " + courier + "\n" +
+      "📋 Service: " + service + "\n" +
+      "👤 Penerima: " + namaSensor + "\n" +
+      "💰 Pembayaran: " + pembayaran + "\n" +
+      "📊 Status: " + status +
+      "\n━━━━━━━━━━━━━━━━━━";
+
+    await ctx.reply(pesan);
 
   } catch (error) {
 
@@ -147,11 +185,15 @@ bot.on("message:text", async (ctx) => {
     );
 
     await ctx.reply(
-      "❌ Terjadi error.\n\n" +
+      "❌ Terjadi kesalahan.\n\n" +
       error.message
     );
   }
 });
+
+// ==========================
+// ERROR BOT
+// ==========================
 
 bot.catch((error) => {
   console.error(
@@ -160,11 +202,14 @@ bot.catch((error) => {
   );
 });
 
+// ==========================
+// START BOT
+// ==========================
+
 bot.start({
   onStart: (info) => {
     console.log(
-      "🤖 BOT AKTIF: @" +
-      info.username
+      "🤖 BOT AKTIF: @" + info.username
     );
   }
 });
