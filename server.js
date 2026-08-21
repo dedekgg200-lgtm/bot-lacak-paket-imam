@@ -1,261 +1,159 @@
-const { Bot } = require("grammy");
+const { Bot, Keyboard } = require("grammy");
+const axios = require("axios");
 
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 const BITESHIP_TOKEN = process.env.BITESHIP_TOKEN;
 
-if (!TOKEN) {
-  throw new Error("TELEGRAM_BOT_TOKEN belum diisi");
-}
-
-if (!BITESHIP_TOKEN) {
-  throw new Error("BITESHIP_TOKEN belum diisi");
-}
-
-const bot = new Bot(TOKEN);
-
-// ===============================
-// START
-// ===============================
+const keyboard = new Keyboard()
+  .text("🔎 Cek Resi SiCepat")
+  .resized();
 
 bot.command("start", async (ctx) => {
   await ctx.reply(
     "👋 Bot Tracking SiCepat aktif.\n\n" +
     "Silakan kirim nomor resi SiCepat.\n\n" +
-    "Contoh:\n" +
-    "004648099109"
+    "Contoh:\n004648099109",
+    { reply_markup: keyboard }
   );
 });
 
-// ===============================
-// CEK RESI
-// ===============================
+bot.hears("🔎 Cek Resi SiCepat", async (ctx) => {
+  await ctx.reply("Silakan kirim nomor resi SiCepat.");
+});
 
 bot.on("message:text", async (ctx) => {
-
   const resi = ctx.message.text.trim();
 
-  // Abaikan perintah
-  if (resi.startsWith("/")) {
+  if (
+    resi === "🔎 Cek Resi SiCepat" ||
+    resi === "/start"
+  ) {
     return;
   }
 
-  // Validasi nomor resi
-  if (!/^[0-9A-Za-z]{8,30}$/.test(resi)) {
-    await ctx.reply(
-      "❌ Nomor resi tidak valid.\n\n" +
-      "Kirim nomor resi SiCepat saja."
+  if (!/^[A-Za-z0-9-]{6,30}$/.test(resi)) {
+    return ctx.reply(
+      "❌ Nomor resi tidak valid.\n\nKirim nomor resi SiCepat saja."
     );
-    return;
+  }
+
+  if (!BITESHIP_TOKEN) {
+    return ctx.reply(
+      "❌ BITESHIP_TOKEN belum ditemukan di Railway."
+    );
   }
 
   await ctx.reply("🔎 Sedang mengecek resi...\nMohon tunggu.");
 
   try {
-
     const url =
-      "https://api.biteship.com/v1/trackings/" +
-      encodeURIComponent(resi) +
-      "/couriers/sicepat";
+      `https://api.biteship.com/v1/trackings/${encodeURIComponent(resi)}/couriers/sicepat`;
 
-    console.log("CEK RESI:", resi);
-    console.log("URL:", url);
-
-    const response = await fetch(url, {
-      method: "GET",
+    const response = await axios.get(url, {
       headers: {
-        "Authorization": `Bearer ${BITESHIP_TOKEN}`,
+        Authorization: BITESHIP_TOKEN,
         "Content-Type": "application/json"
-      }
+      },
+      timeout: 20000
     });
 
-    const result = await response.json();
-
-    console.log(
-      "BITESHIP RESPONSE:",
-      JSON.stringify(result, null, 2)
-    );
-
-    // ===============================
-    // ERROR API
-    // ===============================
-
-    if (!response.ok) {
-
-      if (response.status === 401) {
-        await ctx.reply(
-          "❌ API Biteship tidak menerima token.\n\n" +
-          "Periksa BITESHIP_TOKEN di Railway."
-        );
-        return;
-      }
-
-      if (response.status === 404) {
-        await ctx.reply(
-          "❌ Resi tidak ditemukan di Biteship.\n\n" +
-          "Resi: " + resi
-        );
-        return;
-      }
-
-      await ctx.reply(
-        "❌ API Biteship mengalami masalah.\n\n" +
-        "HTTP: " + response.status
-      );
-
-      return;
-    }
-
-    // ===============================
-    // DATA
-    // ===============================
-
-    const data = result.data || {};
-
-    const summary = data.summary || {};
-
-    const nomorResi =
-      summary.awb ||
-      data.waybill ||
-      data.waybill_id ||
-      resi;
-
-    const status =
-      summary.status ||
-      data.status ||
-      "DATA TIDAK TERSEDIA";
-
-    const service =
-      summary.service ||
-      data.service ||
-      "DATA TIDAK TERSEDIA";
+    const data = response.data;
 
     const penerima =
-      data.recipient ||
+      data.destination?.contact_name ||
       data.receiver?.name ||
-      data.received?.recipient ||
-      "DATA TIDAK TERSEDIA";
+      "-";
 
-    const kurir =
-      summary.courier ||
-      data.courier ||
+    const status =
+      data.status ||
+      data.tracking_status ||
+      data.history?.[data.history.length - 1]?.status ||
+      "-";
+
+    const courier =
+      data.courier?.company ||
       "SiCepat";
 
-    // ===============================
-    // COD
-    // ===============================
+    let pesan =
+      `📦 *TRACKING SICEPAT*\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `📮 *Resi:* ${data.waybill_id || resi}\n` +
+      `🚚 *Kurir:* ${courier}\n` +
+      `📊 *Status:* ${status}\n` +
+      `👤 *Penerima:* ${penerima}\n`;
 
-    const cod =
-      data.cash_on_delivery ||
-      data.cod ||
-      null;
+    // Tampilkan COD hanya kalau API benar-benar memberikan datanya
+    if (data.cash_on_delivery) {
+      const amount =
+        data.cash_on_delivery.amount ??
+        data.cash_on_delivery.value;
 
-    let pembayaran;
-
-    if (cod) {
-
-      pembayaran = "💰 COD";
-
-      const nominal =
-        cod.amount ??
-        cod.value ??
-        cod.nominal;
-
-      if (
-        nominal !== undefined &&
-        nominal !== null
-      ) {
-        pembayaran +=
-          "\n💵 Nominal : Rp " +
-          Number(nominal).toLocaleString("id-ID");
+      if (amount !== undefined) {
+        pesan +=
+          `💰 *COD:* Rp ${Number(amount).toLocaleString("id-ID")}\n`;
+      } else {
+        pesan += `💰 *Jenis:* COD\n`;
       }
-
     } else {
-
-      pembayaran =
-        "💳 COD : DATA TIDAK TERSEDIA";
+      pesan += `💰 *Jenis:* Non-COD / data COD tidak tersedia\n`;
     }
 
-    // ===============================
-    // HASIL
-    // ===============================
+    pesan += `━━━━━━━━━━━━━━`;
 
-    let pesan = "";
+    await ctx.reply(pesan, {
+      parse_mode: "Markdown"
+    });
 
-    pesan += "📦 <b>TRACKING SICEPAT</b>\n";
-    pesan += "━━━━━━━━━━━━━━━━━━\n\n";
+    // Riwayat tracking
+    if (Array.isArray(data.history) && data.history.length > 0) {
+      let riwayat = "📜 *RIWAYAT TRACKING*\n━━━━━━━━━━━━━━\n";
 
-    pesan +=
-      "📮 <b>Resi</b>\n" +
-      "└ <code>" +
-      nomorResi +
-      "</code>\n\n";
-
-    pesan +=
-      "👤 <b>Penerima</b>\n" +
-      "└ " +
-      penerima +
-      "\n\n";
-
-    pesan +=
-      "🚚 <b>Kurir</b>\n" +
-      "└ " +
-      kurir +
-      "\n\n";
-
-    pesan +=
-      "📋 <b>Service</b>\n" +
-      "└ " +
-      service +
-      "\n\n";
-
-    pesan +=
-      "📊 <b>Status</b>\n" +
-      "└ " +
-      status +
-      "\n\n";
-
-    pesan += pembayaran;
-
-    await ctx.reply(
-      pesan,
-      {
-        parse_mode: "HTML"
+      for (const item of data.history.slice().reverse().slice(0, 10)) {
+        riwayat +=
+          `• *${item.status || "-"}*\n` +
+          `${item.note || "-"}\n` +
+          `${item.updated_at || ""}\n\n`;
       }
-    );
+
+      await ctx.reply(riwayat, {
+        parse_mode: "Markdown"
+      });
+    }
 
   } catch (error) {
-
     console.error(
-      "ERROR:",
-      error
+      "Biteship error:",
+      error.response?.data || error.message
     );
+
+    const apiError = error.response?.data;
+
+    if (error.response?.status === 401) {
+      return ctx.reply(
+        "❌ API Key Biteship ditolak.\n\n" +
+        "Periksa BITESHIP_TOKEN di Railway."
+      );
+    }
+
+    if (error.response?.status === 400) {
+      return ctx.reply(
+        "❌ Biteship menolak permintaan.\n\n" +
+        "Resi mungkin belum terdaftar/aktif di Biteship atau format tracking tidak tersedia."
+      );
+    }
 
     await ctx.reply(
-      "❌ Terjadi kesalahan saat menghubungi API Biteship."
+      "❌ Gagal mengambil tracking Biteship.\n\n" +
+      `HTTP: ${error.response?.status || "-"}\n` +
+      `Pesan: ${apiError?.message || error.message}`
     );
   }
 });
 
-// ===============================
-// ERROR TELEGRAM
-// ===============================
-
-bot.catch((error) => {
-  console.error(
-    "TELEGRAM ERROR:",
-    error.error
-  );
+bot.catch((err) => {
+  console.error("BOT ERROR:", err);
 });
 
-// ===============================
-// JALANKAN BOT
-// ===============================
+bot.start();
 
-bot.start({
-  onStart: (info) => {
-    console.log(
-      "🤖 BOT AKTIF: @" +
-      info.username
-    );
-  }
-});
+console.log("🤖 Bot Tracking SiCepat aktif.");
