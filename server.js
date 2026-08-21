@@ -1,90 +1,296 @@
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
+const { Bot } = require("grammy");
 
-app.use(express.json());
+const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
+const API_KEY = process.env.BITESHIP_TOKEN);
 
-// Endpoint Webhook yang menerima lemparan data dari Biteship
-app.post('/webhook-biteship', (req, res) => {
-    try {
-        const data = req.body;
+// ==========================
+// START
+// ==========================
 
-        // 1. Ekstraksi Data Kurir & Resi
-        const namaKurir = data.courier?.company?.toUpperCase() || "SICEPAT EXPRESS";
-        const noResi = data.waybill_id || "004646985892";
-        
-        // 2. LOGIKA UTAMA: Deteksi Status COD atau NONCOD
-        // Mengonversi tipe pembayaran Biteship menjadi teks seperti format teman Anda
-        const tipeBayar = data.payment_type || "prepaid";
-        const serviceType = (tipeBayar.toLowerCase() === "cod") ? "COD" : "NONCOD";
+bot.command("start", async (ctx) => {
+  await ctx.reply(
+    "👋 Bot Tracking SiCepat aktif.\n\n" +
+    "Silakan kirim nomor resi SiCepat.\n\n" +
+    "Contoh:\n004648099109"
+  );
+});
 
-        // 3. Status Pengiriman Utama
-        const statusKurir = data.status?.toUpperCase() || "PICKING_UP";
+// ==========================
+// TRACKING
+// ==========================
 
-        // 4. Data Pengirim & Penerima
-        const namaPengirim = data.shipper?.name || "EcoNest";
-        const asalPengirim = data.shipper?.address?.city || "KAB. TANGERANG";
-        const namaPenerima = data.receiver?.name || "Lidya sintya:*";
-        const tujuanPenerima = data.receiver?.address?.subdistrict || "SUKMAJAYA, KOTA DEPOK";
+bot.on("message:text", async (ctx) => {
+  const resi = ctx.message.text.trim();
 
-        // 5. Membuat Garis Riwayat / POD Detail secara terbalik (Terbaru di atas)
-        let podDetailsText = "";
-        if (data.history && data.history.length > 0) {
-            // Urutkan riwayat agar tanggal terbaru muncul di paling atas
-            const sortedHistory = [...data.history].reverse();
-            
-            sortedHistory.forEach(item => {
-                podDetailsText += `✅ ${item.note.toUpperCase()}\n└ ${item.updated_at || item.timestamp}\n`;
-            });
-        } else {
-            // Cadangan teks tiruan jika Biteship belum mengirimkan array history lengkap
-            podDetailsText = `✅ PAKET GAGAL DI PICK UP OLEH [SIGESIT]. KET: SELLER TUTUP\n└ 2026-08-16 17:50:00\n✅ ORDER HAS BEEN CONFIRMED. LOCATING NEAREST DRIVER TO PICK UP.\n└ 2026-08-16 14:01:00\n`;
+  if (resi.startsWith("/")) return;
+
+  if (!/^[A-Za-z0-9]+$/.test(resi)) {
+    return ctx.reply(
+      "❌ Nomor resi tidak valid.\n\n" +
+      "Kirim nomor resi SiCepat saja."
+    );
+  }
+
+  await ctx.reply("🔎 Sedang mengecek resi...\nMohon tunggu.");
+
+  try {
+    const url =
+      "https://api.biteship.com/v1/trackings/" +
+      encodeURIComponent(resi) +
+      "/couriers/sicepat";
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: API_KEY,
+        "Content-Type": "application/json"
+      }
+    });
+
+    const data = await response.json();
+
+    console.log("========== Biteship ==========");
+    console.log("RESI:", resi);
+    console.log("HTTP:", response.status);
+    console.log(JSON.stringify(data, null, 2));
+    console.log("==============================");
+
+    if (!response.ok) {
+      return ctx.reply(
+        "❌ Biteship menolak permintaan.\n\n" +
+        "HTTP: " + response.status + "\n" +
+        "Pesan: " +
+        (data.message || "Tracking tidak tersedia.")
+      );
+    }
+
+    // ==========================
+    // DATA UTAMA
+    // ==========================
+
+    const nomorResi =
+      data.waybill_id ||
+      data.courier?.waybill_id ||
+      resi;
+
+    const kurir =
+      data.courier?.company ||
+      "SiCepat";
+
+    const status =
+      data.status ||
+      data.tracking_status ||
+      "-";
+
+    // ==========================
+    // NAMA PENERIMA
+    // ==========================
+
+    const nama =
+      data.destination?.contact_name ||
+      data.receiver?.name ||
+      data.recipient ||
+      "-";
+
+    let namaSensor = "***";
+
+    if (nama !== "-" && nama.length > 0) {
+      namaSensor =
+        nama.length <= 3
+          ? nama.substring(0, 1) + "***"
+          : nama.substring(0, 2) + "***";
+    }
+
+    // ==========================
+    // HASIL AWAL
+    // ==========================
+
+    let pesan =
+      "📦 HASIL TRACKING\n" +
+      "━━━━━━━━━━━━━━━━━━\n" +
+      "📮 Resi: " + nomorResi + "\n" +
+      "🚚 Kurir: " + kurir + "\n" +
+      "👤 Penerima: " + namaSensor + "\n" +
+      "📊 Status: " + status;
+
+    // ==========================
+    // PEMBAYARAN
+    // ==========================
+
+    const paymentType =
+      data.payment_type ||
+      data.payment?.type ||
+      data.payment?.payment_type ||
+      null;
+
+    console.log("PAYMENT TYPE:", paymentType);
+
+    if (paymentType === "cod") {
+
+      pesan += "\n\n💰 Pembayaran: COD";
+
+      const nominal =
+        data.cod?.amount ||
+        data.cash_on_delivery?.amount ||
+        data.payment?.amount ||
+        null;
+
+      if (nominal) {
+        pesan +=
+          "\n💵 Nominal: Rp " +
+          Number(nominal).toLocaleString("id-ID");
+      }
+
+      if (status === "delivered") {
+        pesan += "\n💳 Status: Sudah diterima";
+      } else if (status === "rejected") {
+        pesan += "\n💳 Status: Ditolak/retur";
+      } else {
+        pesan += "\n💳 Status: Belum selesai";
+      }
+
+    } else if (
+      paymentType === "prepaid" ||
+      paymentType === "postpaid"
+    ) {
+
+      pesan += "\n\n💰 Pembayaran: NON-COD";
+
+      if (paymentType === "prepaid") {
+        pesan += "\n💳 Status: Sudah dibayar";
+      }
+
+    } else {
+
+      // Jangan menebak kalau Biteship tidak memberikan
+      // informasi jenis pembayaran.
+      pesan +=
+        "\n\n💰 Pembayaran: Tidak diketahui";
+    }
+
+    // ==========================
+    // RIWAYAT TRACKING
+    // ==========================
+
+    const history =
+      data.history ||
+      data.courier?.history ||
+      [];
+
+    if (Array.isArray(history) && history.length > 0) {
+
+      pesan += "\n\n📋 RIWAYAT TRACKING";
+
+      for (const item of history.slice(0, 10)) {
+
+        pesan +=
+          "\n\n📅 " +
+          (item.updated_at || "-");
+
+        pesan +=
+          "\n📊 " +
+          (item.status || "-");
+
+        if (item.note) {
+          pesan +=
+            "\n📝 " +
+            item.note;
         }
+      }
+    }
 
-        // 6. STRUKTUR FORMAT PESAN (Mirip bot teman Anda)
-        const formatPesanBot = 
-`📦 EXPEDISI ${namaKurir.split(' ')[0]}
-└ ${namaKurir}
+    // ==========================
+    // POD
+    // ==========================
 
-📩 Resi
-├ Service : ${serviceType}
-└ No Resi : ${noResi}
+    let podImage = null;
 
-📮 Status
-└ Status : ${statusKurir}
+    if (Array.isArray(history)) {
 
-🚀 Pengirim
-├ ${namaPengirim}
-└ ${asalPengirim}
+      for (const item of history) {
 
-🚩 Penerima
-├ ${namaPenerima}
-└ ${tujuanPenerima}
+        if (
+          Array.isArray(item.proof_of_delivery_images) &&
+          item.proof_of_delivery_images.length > 0
+        ) {
+          podImage =
+            item.proof_of_delivery_images[0];
+          break;
+        }
+      }
+    }
 
-⏩ POD Detail
-${podDetailsText}`;
+    if (
+      !podImage &&
+      data.proof_of_delivery?.photo_url
+    ) {
+      podImage =
+        data.proof_of_delivery.photo_url;
+    }
 
-        // Cetak hasilnya di Logs Railway Anda untuk di-copy atau diteruskan ke Bot WA/Telegram
-        console.log("\n====== HASIL FORMAT BOT ======");
-        console.log(formatPesanBot);
-        console.log("==============================\n");
+    if (podImage) {
+      pesan += "\n\n📸 POD: Tersedia";
+    } else {
+      pesan += "\n\n📸 POD: Belum tersedia";
+    }
 
-        res.status(200).json({
-            success: true,
-            message: "Format teks berhasil dibuat",
-            text_output: formatPesanBot
+    pesan +=
+      "\n━━━━━━━━━━━━━━━━━━";
+
+    // ==========================
+    // KIRIM HASIL
+    // ==========================
+
+    await ctx.reply(pesan);
+
+    // ==========================
+    // KIRIM FOTO POD
+    // ==========================
+
+    if (podImage) {
+
+      try {
+
+        await ctx.replyWithPhoto(podImage, {
+          caption: "📸 Bukti Pengiriman (POD)"
         });
 
-    } catch (error) {
-        console.error("Error generating format:", error.message);
-        res.status(500).send("Internal Server Error");
+      } catch (error) {
+
+        console.error(
+          "Gagal mengirim POD:",
+          error.message
+        );
+      }
     }
+
+  } catch (error) {
+
+    console.error("ERROR:", error);
+
+    await ctx.reply(
+      "❌ Terjadi kesalahan.\n\n" +
+      error.message
+    );
+  }
 });
 
-app.get('/', (req, res) => {
-    res.send('Server Format Bot Teks Biteship Aktif di Railway!');
+// ==========================
+// ERROR BOT
+// ==========================
+
+bot.catch((error) => {
+  console.error("BOT ERROR:", error.error);
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+// ==========================
+// JALANKAN BOT
+// ==========================
+
+bot.start({
+  onStart: (info) => {
+    console.log(
+      "🤖 BOT AKTIF: @" + info.username
+    );
+  }
 });
