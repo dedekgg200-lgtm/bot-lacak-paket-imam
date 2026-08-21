@@ -1,7 +1,7 @@
 {
   "name": "bot-lacak-paket",
   "version": "1.0.0",
-  "description": "Bot Telegram tracking SiCepat menggunakan BinderByte API",
+  "description": "Bot Telegram tracking BinderByte",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
