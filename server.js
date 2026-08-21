@@ -1,7 +1,7 @@
 const { Bot } = require("grammy");
 
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
-const API_KEY = process.env.BITESHIP_TOKEN;
+const API_KEY = process.env.BITESHIP_TOKEN);
 
 // ==========================
 // START
@@ -20,29 +20,20 @@ bot.command("start", async (ctx) => {
 // ==========================
 
 bot.on("message:text", async (ctx) => {
-
   const resi = ctx.message.text.trim();
 
-  // Abaikan command
-  if (resi.startsWith("/")) {
-    return;
-  }
+  if (resi.startsWith("/")) return;
 
-  // Validasi
   if (!/^[A-Za-z0-9]+$/.test(resi)) {
-    await ctx.reply(
+    return ctx.reply(
       "❌ Nomor resi tidak valid.\n\n" +
       "Kirim nomor resi SiCepat saja."
     );
-    return;
   }
 
-  await ctx.reply(
-    "🔎 Sedang mengecek resi...\nMohon tunggu."
-  );
+  await ctx.reply("🔎 Sedang mengecek resi...\nMohon tunggu.");
 
   try {
-
     const url =
       "https://api.biteship.com/v1/trackings/" +
       encodeURIComponent(resi) +
@@ -51,34 +42,26 @@ bot.on("message:text", async (ctx) => {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": API_KEY,
+        Authorization: API_KEY,
         "Content-Type": "application/json"
       }
     });
 
     const data = await response.json();
 
-    // Simpan response di Railway Logs
-    console.log("================================");
+    console.log("========== Biteship ==========");
     console.log("RESI:", resi);
     console.log("HTTP:", response.status);
     console.log(JSON.stringify(data, null, 2));
-    console.log("================================");
-
-    // ==========================
-    // JIKA API ERROR
-    // ==========================
+    console.log("==============================");
 
     if (!response.ok) {
-
-      await ctx.reply(
+      return ctx.reply(
         "❌ Biteship menolak permintaan.\n\n" +
         "HTTP: " + response.status + "\n" +
         "Pesan: " +
         (data.message || "Tracking tidak tersedia.")
       );
-
-      return;
     }
 
     // ==========================
@@ -111,18 +94,15 @@ bot.on("message:text", async (ctx) => {
 
     let namaSensor = "***";
 
-    if (nama && nama !== "-") {
-
-      if (nama.length <= 3) {
-        namaSensor = nama.substring(0, 1) + "***";
-      } else {
-        namaSensor =
-          nama.substring(0, 2) + "***";
-      }
+    if (nama !== "-" && nama.length > 0) {
+      namaSensor =
+        nama.length <= 3
+          ? nama.substring(0, 1) + "***"
+          : nama.substring(0, 2) + "***";
     }
 
     // ==========================
-    // PESAN UTAMA
+    // HASIL AWAL
     // ==========================
 
     let pesan =
@@ -134,41 +114,62 @@ bot.on("message:text", async (ctx) => {
       "📊 Status: " + status;
 
     // ==========================
-    // COD
+    // PEMBAYARAN
     // ==========================
 
-    const cod =
-      data.cash_on_delivery ||
-      data.cod ||
-      data.payment?.cod;
+    const paymentType =
+      data.payment_type ||
+      data.payment?.type ||
+      data.payment?.payment_type ||
+      null;
 
-    if (cod) {
+    console.log("PAYMENT TYPE:", paymentType);
 
-      pesan +=
-        "\n\n💰 COD: YA";
+    if (paymentType === "cod") {
 
-      if (cod.amount != null) {
+      pesan += "\n\n💰 Pembayaran: COD";
 
+      const nominal =
+        data.cod?.amount ||
+        data.cash_on_delivery?.amount ||
+        data.payment?.amount ||
+        null;
+
+      if (nominal) {
         pesan +=
           "\n💵 Nominal: Rp " +
-          Number(cod.amount).toLocaleString("id-ID");
+          Number(nominal).toLocaleString("id-ID");
       }
 
-      if (cod.status) {
+      if (status === "delivered") {
+        pesan += "\n💳 Status: Sudah diterima";
+      } else if (status === "rejected") {
+        pesan += "\n💳 Status: Ditolak/retur";
+      } else {
+        pesan += "\n💳 Status: Belum selesai";
+      }
 
-        pesan +=
-          "\n💳 Status COD: " +
-          cod.status;
+    } else if (
+      paymentType === "prepaid" ||
+      paymentType === "postpaid"
+    ) {
+
+      pesan += "\n\n💰 Pembayaran: NON-COD";
+
+      if (paymentType === "prepaid") {
+        pesan += "\n💳 Status: Sudah dibayar";
       }
 
     } else {
 
+      // Jangan menebak kalau Biteship tidak memberikan
+      // informasi jenis pembayaran.
       pesan +=
-        "\n\n💰 COD: Tidak tersedia di response API";
+        "\n\n💰 Pembayaran: Tidak diketahui";
     }
 
     // ==========================
-    // RIWAYAT
+    // RIWAYAT TRACKING
     // ==========================
 
     const history =
@@ -178,8 +179,7 @@ bot.on("message:text", async (ctx) => {
 
     if (Array.isArray(history) && history.length > 0) {
 
-      pesan +=
-        "\n\n📋 RIWAYAT TRACKING";
+      pesan += "\n\n📋 RIWAYAT TRACKING";
 
       for (const item of history.slice(0, 10)) {
 
@@ -192,7 +192,6 @@ bot.on("message:text", async (ctx) => {
           (item.status || "-");
 
         if (item.note) {
-
           pesan +=
             "\n📝 " +
             item.note;
@@ -214,30 +213,25 @@ bot.on("message:text", async (ctx) => {
           Array.isArray(item.proof_of_delivery_images) &&
           item.proof_of_delivery_images.length > 0
         ) {
-
           podImage =
             item.proof_of_delivery_images[0];
-
           break;
         }
       }
     }
 
-    if (!podImage && data.proof_of_delivery?.photo_url) {
-
+    if (
+      !podImage &&
+      data.proof_of_delivery?.photo_url
+    ) {
       podImage =
         data.proof_of_delivery.photo_url;
     }
 
     if (podImage) {
-
-      pesan +=
-        "\n\n📸 POD: Tersedia";
-
+      pesan += "\n\n📸 POD: Tersedia";
     } else {
-
-      pesan +=
-        "\n\n📸 POD: Belum tersedia";
+      pesan += "\n\n📸 POD: Belum tersedia";
     }
 
     pesan +=
@@ -250,7 +244,7 @@ bot.on("message:text", async (ctx) => {
     await ctx.reply(pesan);
 
     // ==========================
-    // KIRIM FOTO POD JIKA ADA
+    // KIRIM FOTO POD
     // ==========================
 
     if (podImage) {
@@ -261,21 +255,18 @@ bot.on("message:text", async (ctx) => {
           caption: "📸 Bukti Pengiriman (POD)"
         });
 
-      } catch (fotoError) {
+      } catch (error) {
 
         console.error(
-          "Gagal mengirim foto POD:",
-          fotoError.message
+          "Gagal mengirim POD:",
+          error.message
         );
       }
     }
 
   } catch (error) {
 
-    console.error(
-      "ERROR:",
-      error
-    );
+    console.error("ERROR:", error);
 
     await ctx.reply(
       "❌ Terjadi kesalahan.\n\n" +
@@ -289,11 +280,7 @@ bot.on("message:text", async (ctx) => {
 // ==========================
 
 bot.catch((error) => {
-
-  console.error(
-    "BOT ERROR:",
-    error.error
-  );
+  console.error("BOT ERROR:", error.error);
 });
 
 // ==========================
@@ -302,11 +289,8 @@ bot.catch((error) => {
 
 bot.start({
   onStart: (info) => {
-
     console.log(
-      "🤖 BOT AKTIF: @" +
-      info.username
+      "🤖 BOT AKTIF: @" + info.username
     );
-
   }
 });
