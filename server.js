@@ -1,28 +1,35 @@
 const { Bot } = require("grammy");
-const axios = require("axios");
 const express = require("express");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BITESHIP_TOKEN = process.env.BITESHIP_TOKEN;
 
+if (!TELEGRAM_TOKEN) {
+  throw new Error("TELEGRAM_BOT_TOKEN belum diisi");
+}
+
+if (!BITESHIP_TOKEN) {
+  throw new Error("BITESHIP_TOKEN belum diisi");
+}
+
+const bot = new Bot(TELEGRAM_TOKEN);
+
 app.get("/", (req, res) => {
-  res.send("Bot tracking aktif");
+  res.send("Bot aktif");
 });
 
 app.listen(PORT, () => {
-  console.log("Server aktif di port " + PORT);
+  console.log("SERVER AKTIF");
 });
 
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    "📦 Bot Tracking siap.\n\n" +
-    "Kirim:\n" +
-    "sicepat 004646985892\n\n" +
-    "Contoh:\n" +
-    "jne 012345678901234"
+    "👋 Bot tracking aktif.\n\n" +
+    "Kirim seperti ini:\n" +
+    "sicepat 004646985892"
   );
 });
 
@@ -31,157 +38,113 @@ bot.on("message:text", async (ctx) => {
 
   if (text.startsWith("/")) return;
 
-  const data = text.split(/\s+/);
+  const [courier, resi] = text.split(/\s+/);
 
-  if (data.length < 2) {
+  if (!courier || !resi) {
     return ctx.reply(
       "❌ Format salah.\n\n" +
-      "Gunakan:\n" +
-      "sicepat NOMOR_RESI"
+      "Contoh:\n" +
+      "sicepat 004646985892"
     );
   }
 
-  const courier = data[0].toLowerCase();
-  const resi = data[1];
-
-  await cekResi(ctx, courier, resi);
-});
-
-async function cekResi(ctx, courier, resi) {
   await ctx.reply("🔎 Mengecek resi...");
 
   try {
     const url =
-      `https://api.biteship.com/v1/trackings/` +
-      `${encodeURIComponent(resi)}/couriers/` +
-      `${encodeURIComponent(courier)}`;
+      "https://api.biteship.com/v1/trackings/" +
+      encodeURIComponent(resi) +
+      "/couriers/" +
+      encodeURIComponent(courier.toLowerCase());
 
-    const response = await axios.get(url, {
+    const response = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${BITESHIP_TOKEN}`,
+        "Authorization": `Bearer ${BITESHIP_TOKEN}`,
         "Content-Type": "application/json"
-      },
-      timeout: 30000
+      }
     });
 
-    const data = response.data;
+    const data = await response.json();
 
-    console.log(JSON.stringify(data, null, 2));
+    console.log("BITESHIP:", JSON.stringify(data));
 
-    const summary = data.data?.summary || {};
-    const tracking = data.data?.tracking || [];
+    if (!response.ok) {
+      return ctx.reply(
+        "❌ Gagal cek resi.\n\n" +
+        "HTTP: " + response.status + "\n" +
+        "Resi: " + resi
+      );
+    }
 
-    const nomorResi =
+    const d = data.data || {};
+    const summary = d.summary || {};
+
+    const nomor =
       summary.awb ||
-      data.data?.waybill_id ||
+      d.waybill_id ||
+      d.waybill ||
       resi;
-
-    const nama =
-      data.data?.recipient ||
-      data.data?.receiver?.name ||
-      data.data?.destination?.name ||
-      "-";
 
     const kurir =
       summary.courier ||
-      data.data?.courier ||
+      d.courier ||
       courier;
 
     const service =
       summary.service ||
-      data.data?.service ||
+      d.service ||
       "-";
 
     const status =
       summary.status ||
-      data.data?.status ||
+      d.status ||
       "-";
 
-    let pembayaran = "";
-
-    // Hanya tampilkan COD jika API benar-benar memberikan data COD
-    const cod =
-      data.data?.cash_on_delivery ||
-      data.data?.cod ||
-      null;
-
-    if (cod) {
-      const nominal =
-        cod.amount ??
-        cod.value ??
-        null;
-
-      pembayaran = "💰 COD";
-
-      if (nominal !== null) {
-        pembayaran +=
-          `\n💵 Nominal: Rp ${Number(nominal).toLocaleString("id-ID")}`;
-      }
-    } else {
-      pembayaran = "💳 NON-COD";
-    }
+    const penerima =
+      d.received?.recipient ||
+      d.recipient ||
+      d.receiver?.name ||
+      "-";
 
     let pesan =
-      `📦 *HASIL TRACKING*\n` +
-      `━━━━━━━━━━━━━━\n` +
-      `📮 Resi: \`${nomorResi}\`\n` +
-      `👤 Penerima: ${nama}\n` +
-      `🚚 Kurir: ${kurir}\n` +
-      `📋 Service: ${service}\n` +
-      `${pembayaran}\n` +
-      `📊 Status: *${status}*`;
+      "📦 TRACKING PAKET\n\n" +
+      "📮 Resi : " + nomor + "\n" +
+      "🚚 Kurir : " + kurir + "\n" +
+      "📋 Service : " + service + "\n" +
+      "👤 Penerima : " + penerima + "\n" +
+      "📊 Status : " + status;
 
-    // Ambil update terakhir kalau tersedia
-    if (tracking.length > 0) {
-      const terakhir = tracking[0];
+    // COD hanya ditampilkan jika API benar-benar mengirim datanya
+    const cod = d.cash_on_delivery || d.cod;
 
-      const keterangan =
-        terakhir.description ||
-        terakhir.desc ||
-        terakhir.status ||
-        "";
+    if (cod) {
+      pesan += "\n💰 Pembayaran : COD";
 
-      if (keterangan) {
-        pesan += `\n\n📍 Update:\n${keterangan}`;
+      if (cod.amount != null) {
+        pesan +=
+          "\n💵 Nominal : Rp " +
+          Number(cod.amount).toLocaleString("id-ID");
       }
+    } else {
+      pesan += "\n💰 Pembayaran : NON-COD / DATA COD TIDAK TERSEDIA";
     }
 
-    await ctx.reply(pesan, {
-      parse_mode: "Markdown"
-    });
+    await ctx.reply(pesan);
 
   } catch (error) {
-    console.error(
-      "ERROR:",
-      error.response?.data || error.message
-    );
-
-    if (error.response?.status === 401) {
-      return ctx.reply(
-        "❌ API Biteship ditolak.\n\n" +
-        "Periksa BITESHIP_TOKEN di Railway."
-      );
-    }
-
-    if (error.response?.status === 404) {
-      return ctx.reply(
-        "❌ Resi tidak ditemukan.\n\n" +
-        "Pastikan nomor resi dan nama kurir benar."
-      );
-    }
+    console.error("ERROR:", error);
 
     await ctx.reply(
-      "❌ Gagal cek resi.\n\n" +
-      "Resi: " + resi +
-      "\nKurir: " + courier
+      "❌ Terjadi error saat menghubungi Biteship.\n\n" +
+      error.message
     );
   }
-}
+});
 
 bot.catch((err) => {
-  console.error("Telegram Error:", err.error);
+  console.error("TELEGRAM ERROR:", err.error);
 });
 
 bot.start();
 
-console.log("🤖 Bot Telegram aktif");
+console.log("BOT TELEGRAM AKTIF");
