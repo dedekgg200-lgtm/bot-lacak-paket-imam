@@ -1,12 +1,11 @@
 {
-  "name": "telegram-biteship-bot",
+  "name": "bot-lacak-paket",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.11.0",
     "grammy": "^1.38.0"
   }
 }
