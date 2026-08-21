@@ -5,8 +5,7 @@ const API_KEY = process.env.BITESHIP_TOKEN;
 
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    "👋 Bot aktif.\n\n" +
-    "Kirim nomor resi SiCepat."
+    "👋 Bot aktif.\n\nKirim nomor resi SiCepat."
   );
 });
 
@@ -22,12 +21,16 @@ bot.on("message:text", async (ctx) => {
   await ctx.reply("🔎 Mengecek resi...");
 
   try {
-    const url =
+    // =================================
+    // 1. CEK PUBLIC TRACKING
+    // =================================
+
+    const trackingUrl =
       "https://api.biteship.com/v1/trackings/" +
       encodeURIComponent(resi) +
       "/couriers/sicepat";
 
-    const response = await fetch(url, {
+    const trackingResponse = await fetch(trackingUrl, {
       method: "GET",
       headers: {
         "Authorization": API_KEY,
@@ -35,68 +38,133 @@ bot.on("message:text", async (ctx) => {
       }
     });
 
-    const data = await response.json();
+    const tracking = await trackingResponse.json();
 
-    console.log("HTTP:", response.status);
-    console.log("RESPONSE:", JSON.stringify(data, null, 2));
+    console.log(
+      "TRACKING:",
+      JSON.stringify(tracking, null, 2)
+    );
 
-    if (!response.ok) {
+    if (!trackingResponse.ok) {
       return ctx.reply(
         "❌ Gagal cek resi.\n\n" +
-        "HTTP: " + response.status + "\n" +
-        "Pesan: " + (data.message || "Tidak tersedia")
+        "HTTP: " +
+        trackingResponse.status +
+        "\n" +
+        "Pesan: " +
+        (tracking.message || "Tidak tersedia")
       );
     }
 
-    // SERVICE
-    const service =
-      data.service ||
-      data.courier?.type ||
-      data.courier?.service ||
-      "-";
+    // =================================
+    // 2. SERVICE
+    // =================================
 
-    // PEMBAYARAN
-    const paymentType =
-      data.payment_type ||
-      data.payment?.type ||
-      data.payment?.payment_type ||
+    const service =
+      tracking.service ||
+      tracking.courier?.type ||
+      tracking.history?.[0]?.service_type ||
+      "SiCepat";
+
+    // =================================
+    // 3. CARI ORDER ID
+    // =================================
+
+    const orderId =
+      tracking.order_id ||
+      tracking.orderId ||
       null;
 
     let pembayaran = "Tidak diketahui";
 
-    if (paymentType === "cod") {
-      pembayaran = "COD";
-    } else if (
-      paymentType === "prepaid" ||
-      paymentType === "postpaid"
-    ) {
-      pembayaran = "NON-COD";
+    // =================================
+    // 4. JIKA ADA ORDER ID,
+    //    CEK DETAIL ORDER
+    // =================================
+
+    if (orderId) {
+
+      console.log(
+        "ORDER ID DITEMUKAN:",
+        orderId
+      );
+
+      const orderUrl =
+        "https://api.biteship.com/v1/orders/" +
+        encodeURIComponent(orderId);
+
+      const orderResponse = await fetch(orderUrl, {
+        method: "GET",
+        headers: {
+          "Authorization": API_KEY,
+          "Content-Type": "application/json"
+        }
+      });
+
+      const order = await orderResponse.json();
+
+      console.log(
+        "ORDER RESPONSE:",
+        JSON.stringify(order, null, 2)
+      );
+
+      if (orderResponse.ok) {
+
+        const cod =
+          order.destination?.cash_on_delivery ||
+          order.cash_on_delivery ||
+          null;
+
+        if (cod) {
+          pembayaran = "COD";
+        } else {
+          pembayaran = "NON-COD";
+        }
+      }
     }
+
+    // =================================
+    // 5. HASIL
+    // =================================
 
     await ctx.reply(
       "📦 HASIL PAKET\n\n" +
-      "📮 Resi: " + resi + "\n" +
-      "🚚 Service: " + service + "\n" +
-      "💰 Pembayaran: " + pembayaran
+      "📮 Resi: " +
+      resi +
+      "\n" +
+      "🚚 Service: " +
+      service +
+      "\n" +
+      "💰 Pembayaran: " +
+      pembayaran
     );
 
   } catch (error) {
 
-    console.error("ERROR:", error);
+    console.error(
+      "ERROR:",
+      error
+    );
 
     await ctx.reply(
-      "❌ Error koneksi\n\n" +
+      "❌ Terjadi error.\n\n" +
       error.message
     );
   }
 });
 
 bot.catch((error) => {
-  console.error("BOT ERROR:", error.error);
+  console.error(
+    "BOT ERROR:",
+    error.error
+  );
 });
 
 bot.start({
   onStart: (info) => {
-    console.log("🤖 BOT AKTIF: @" + info.username);
+    console.log(
+      "🤖 BOT AKTIF: @" +
+      info.username
+    );
   }
 });
