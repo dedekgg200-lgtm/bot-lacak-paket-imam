@@ -1,11 +1,15 @@
 {
-  "name": "bot-lacak-paket",
+  "name": "bot-tracking-sicepat",
   "version": "1.0.0",
+  "description": "Telegram bot tracking SiCepat menggunakan Biteship",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "grammy": "^1.38.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
