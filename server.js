@@ -8,7 +8,8 @@ const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const BINDERBYTE_API_KEY = process.env.BINDERBYTE_API_KEY;
 
-const waitingResi = new Set();
+// Menyimpan pilihan kurir sementara setiap pengguna
+const waitingResi = new Map();
 
 let offset = 0;
 let pollingRunning = false;
@@ -67,7 +68,7 @@ async function sendMessage(chatId, text, keyboard = null) {
 
 
 // =====================================================
-// MENU
+// MENU UTAMA
 // =====================================================
 
 function menuUtama() {
@@ -77,6 +78,11 @@ function menuUtama() {
       [
         {
           text: "🔎 Cek Resi SiCepat"
+        }
+      ],
+      [
+        {
+          text: "🔎 Cek Resi ID Express"
         }
       ]
     ],
@@ -107,10 +113,10 @@ function clean(value, fallback = "") {
 
 
 // =====================================================
-// BINDERBYTE
+// CEK RESI BINDERBYTE
 // =====================================================
 
-async function cekResiSiCepat(awb) {
+async function cekResi(awb, courier) {
 
   if (!BINDERBYTE_API_KEY) {
     throw new Error("BINDERBYTE_API_KEY belum tersedia.");
@@ -118,7 +124,7 @@ async function cekResiSiCepat(awb) {
 
   const params = new URLSearchParams({
     api_key: BINDERBYTE_API_KEY,
-    courier: "sicepat",
+    courier: courier,
     awb: awb
   });
 
@@ -130,8 +136,11 @@ async function cekResiSiCepat(awb) {
   let json;
 
   try {
+
     json = await response.json();
+
   } catch {
+
     throw new Error(
       `Respons BinderByte tidak valid. HTTP ${response.status}`
     );
@@ -216,7 +225,7 @@ function getStatus(data) {
 // FORMAT TRACKING
 // =====================================================
 
-function formatTracking(data, inputAwb) {
+function formatTracking(data, inputAwb, courierName) {
 
   const summary = data?.summary || {};
   const detail = data?.detail || {};
@@ -232,7 +241,7 @@ function formatTracking(data, inputAwb) {
 
   const courier = clean(
     summary.courier,
-    "SiCepat Express"
+    courierName
   );
 
   const service = getService(data);
@@ -260,7 +269,7 @@ function formatTracking(data, inputAwb) {
 
   let text = "";
 
-  text += "📦 EXPEDISI SICEPAT\n";
+  text += `📦 EXPEDISI ${courierName.toUpperCase()}\n`;
   text += `└ ${courier}\n\n`;
 
   text += "📩 Resi\n";
@@ -308,7 +317,9 @@ function formatTracking(data, inputAwb) {
       if (item?.location) {
         text += `└ 📍 ${item.location}\n`;
       }
+
     });
+
   }
 
   return text;
@@ -319,7 +330,12 @@ function formatTracking(data, inputAwb) {
 // PROSES SATU RESI
 // =====================================================
 
-async function prosesSatuResi(chatId, awb) {
+async function prosesSatuResi(
+  chatId,
+  awb,
+  courierCode,
+  courierName
+) {
 
   awb = String(awb || "")
     .replace(/\s+/g, "")
@@ -331,13 +347,16 @@ async function prosesSatuResi(chatId, awb) {
 
   await sendMessage(
     chatId,
-    `🔎 Mengecek resi:\n${awb}\n\nMohon tunggu...`
+    `🔎 Mengecek resi ${courierName}:\n${awb}\n\nMohon tunggu...`
   );
 
   try {
 
     const response =
-      await cekResiSiCepat(awb);
+      await cekResi(
+        awb,
+        courierCode
+      );
 
     const result =
       response.json;
@@ -353,6 +372,7 @@ async function prosesSatuResi(chatId, awb) {
 
         "❌ Gagal mengambil data tracking.\n\n" +
         `Resi : ${awb}\n` +
+        `Ekspedisi : ${courierName}\n` +
         `Pesan : ${
           result?.message ||
           "Resi tidak ditemukan."
@@ -378,7 +398,8 @@ async function prosesSatuResi(chatId, awb) {
     const hasil =
       formatTracking(
         result.data,
-        awb
+        awb,
+        courierName
       );
 
     await sendMessage(
@@ -398,6 +419,7 @@ async function prosesSatuResi(chatId, awb) {
       `❌ Gagal mengecek resi ${awb}.\n\nSilakan coba lagi.`
     );
   }
+
 }
 
 
@@ -405,7 +427,12 @@ async function prosesSatuResi(chatId, awb) {
 // PROSES BANYAK RESI
 // =====================================================
 
-async function prosesBanyakResi(chatId, text) {
+async function prosesBanyakResi(
+  chatId,
+  text,
+  courierCode,
+  courierName
+) {
 
   const resiList = text
     .split(/\r?\n/)
@@ -414,7 +441,6 @@ async function prosesBanyakResi(chatId, text) {
     )
     .filter((item) => item.length > 0);
 
-  // Hilangkan nomor yang sama
   const unik = [...new Set(resiList)];
 
   if (unik.length > 50) {
@@ -431,10 +457,11 @@ async function prosesBanyakResi(chatId, text) {
 
     await prosesSatuResi(
       chatId,
-      resi
+      resi,
+      courierCode,
+      courierName
     );
 
-    // Jeda supaya request berjalan satu per satu
     await new Promise((resolve) =>
       setTimeout(resolve, 1000)
     );
@@ -512,9 +539,9 @@ async function pollingTelegram() {
       );
 
 
-      // =================================================
+      // ===============================================
       // START
-      // =================================================
+      // ===============================================
 
       if (text === "/start") {
 
@@ -524,8 +551,8 @@ async function pollingTelegram() {
           chatId,
 
           "👋 Selamat datang.\n\n" +
-          "Silakan tekan tombol di bawah untuk cek resi SiCepat.\n\n" +
-          "💡 Bisa kirim 1 resi atau beberapa resi sekaligus.",
+          "Silakan pilih ekspedisi yang ingin dicek.\n\n" +
+          "💡 Bisa mengirim 1 resi atau beberapa resi sekaligus.",
 
           menuUtama()
         );
@@ -534,25 +561,27 @@ async function pollingTelegram() {
       }
 
 
-      // =================================================
-      // TOMBOL CEK RESI
-      // =================================================
+      // ===============================================
+      // SICEPAT
+      // ===============================================
 
       if (
         text === "🔎 Cek Resi SiCepat"
       ) {
 
-        waitingResi.add(chatId);
+        waitingResi.set(
+          chatId,
+          {
+            courierCode: "sicepat",
+            courierName: "SiCepat Express"
+          }
+        );
 
         await sendMessage(
           chatId,
 
           "📩 Silakan kirim nomor resi SiCepat.\n\n" +
           "Bisa 1 resi atau banyak resi.\n\n" +
-          "Contoh:\n" +
-          "004646985892\n" +
-          "004646985893\n" +
-          "004646985894\n\n" +
           "Maksimal 50 resi.",
 
           menuUtama()
@@ -562,28 +591,65 @@ async function pollingTelegram() {
       }
 
 
-      // =================================================
-      // MENUNGGU RESI
-      // =================================================
+      // ===============================================
+      // ID EXPRESS
+      // ===============================================
 
       if (
-        waitingResi.has(chatId)
+        text === "🔎 Cek Resi ID Express"
       ) {
 
-        waitingResi.delete(chatId);
-
-        await prosesBanyakResi(
+        waitingResi.set(
           chatId,
-          text
+          {
+            courierCode: "ide",
+            courierName: "ID Express"
+          }
+        );
+
+        await sendMessage(
+          chatId,
+
+          "📩 Silakan kirim nomor resi ID Express.\n\n" +
+          "Bisa 1 resi atau banyak resi.\n\n" +
+          "Contoh:\n" +
+          "TKP8029020074\n\n" +
+          "Maksimal 50 resi.",
+
+          menuUtama()
         );
 
         continue;
       }
 
 
-      // =================================================
-      // /LACAK
-      // =================================================
+      // ===============================================
+      // MENUNGGU RESI
+      // ===============================================
+
+      if (
+        waitingResi.has(chatId)
+      ) {
+
+        const pilihan =
+          waitingResi.get(chatId);
+
+        waitingResi.delete(chatId);
+
+        await prosesBanyakResi(
+          chatId,
+          text,
+          pilihan.courierCode,
+          pilihan.courierName
+        );
+
+        continue;
+      }
+
+
+      // ===============================================
+      // /LACAK SICEPAT
+      // ===============================================
 
       if (
         text
@@ -600,7 +666,7 @@ async function pollingTelegram() {
 
           await sendMessage(
             chatId,
-            "❌ Contoh:\n/lacak 004646985892",
+            "❌ Silakan pilih ekspedisi dari tombol menu.",
             menuUtama()
           );
 
@@ -609,11 +675,14 @@ async function pollingTelegram() {
 
         await prosesBanyakResi(
           chatId,
-          resiText
+          resiText,
+          "sicepat",
+          "SiCepat Express"
         );
 
         continue;
       }
+
     }
 
   } catch (error) {
@@ -627,6 +696,7 @@ async function pollingTelegram() {
 
     pollingRunning = false;
   }
+
 }
 
 
@@ -641,8 +711,9 @@ app.get(
     res.json({
       success: true,
       message:
-        "Bot Tracking SiCepat BinderByte aktif"
+        "Bot Tracking SiCepat dan ID Express aktif"
     });
+
   }
 );
 
@@ -695,5 +766,6 @@ app.listen(
         "Environment variable belum lengkap."
       );
     }
+
   }
 );
