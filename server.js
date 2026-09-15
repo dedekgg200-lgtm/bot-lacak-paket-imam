@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const BINDERBYTE_API_KEY = process.env.BINDERBYTE_API_KEY;
+const ADMIN_TELEGRAM_ID = "ISI_ID_TELEGRAM_KAMU";
 
 // Menyimpan pilihan kurir sementara setiap pengguna
 const waitingResi = new Map();
