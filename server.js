@@ -7,7 +7,19 @@ const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const BINDERBYTE_API_KEY = process.env.BINDERBYTE_API_KEY;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TEGRAM_ID;
+
+// =====================================================
+// ID TELEGRAM YANG DIIZINKAN
+// Diambil dari Railway:
+// ADMIN_TELEGRAM_ID=123456789,987654321
+// =====================================================
+
+const ADMIN_TELEGRAM_IDS = process.env.ADMIN_TELEGRAM_ID
+  ? process.env.ADMIN_TELEGRAM_ID
+      .split(",")
+      .map(id => id.trim())
+      .filter(Boolean)
+  : [];
 
 
 // =====================================================
@@ -542,13 +554,15 @@ async function pollingTelegram() {
 
 
       // =================================================
-      // CEK ID TELEGRAM ADMIN
+      // CEK ID TELEGRAM
       // =================================================
 
       const userId =
         String(message.from?.id || "");
 
-      if (!ADMIN_TELEGRAM_ID) {
+      if (
+        ADMIN_TELEGRAM_IDS.length === 0
+      ) {
 
         console.error(
           "❌ ADMIN_TELEGRAM_ID belum diatur di Railway."
@@ -558,8 +572,7 @@ async function pollingTelegram() {
       }
 
       if (
-        userId !==
-        String(ADMIN_TELEGRAM_ID).trim()
+        !ADMIN_TELEGRAM_IDS.includes(userId)
       ) {
 
         console.log(
@@ -577,7 +590,7 @@ async function pollingTelegram() {
 
 
       // =================================================
-      // USER YANG DIIZINKAN
+      // USER DIIZINKAN
       // =================================================
 
       const chatId =
@@ -800,15 +813,15 @@ app.listen(
 
     console.log(
       "ADMIN_TELEGRAM_ID:",
-      ADMIN_TELEGRAM_ID
-        ? "ADA"
+      ADMIN_TELEGRAM_IDS.length > 0
+        ? `${ADMIN_TELEGRAM_IDS.length} ID TERDAFTAR`
         : "TIDAK ADA"
     );
 
     if (
       TELEGRAM_TOKEN &&
       BINDERBYTE_API_KEY &&
-      ADMIN_TELEGRAM_ID
+      ADMIN_TELEGRAM_IDS.length > 0
     ) {
 
       console.log(
