@@ -7,9 +7,13 @@ const PORT = process.env.PORT || 3000;
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const BINDERBYTE_API_KEY = process.env.BINDERBYTE_API_KEY;
-const ADMIN_TELEGRAM_ID = "ISI_ID_TELEGRAM_KAMU";
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TEGRAM_ID;
 
-// Menyimpan pilihan kurir sementara setiap pengguna
+
+// =====================================================
+// MENYIMPAN PILIHAN KURIR SEMENTARA
+// =====================================================
+
 const waitingResi = new Map();
 
 let offset = 0;
@@ -145,6 +149,7 @@ async function cekResi(awb, courier) {
     throw new Error(
       `Respons BinderByte tidak valid. HTTP ${response.status}`
     );
+
   }
 
   console.log(
@@ -226,7 +231,11 @@ function getStatus(data) {
 // FORMAT TRACKING
 // =====================================================
 
-function formatTracking(data, inputAwb, courierName) {
+function formatTracking(
+  data,
+  inputAwb,
+  courierName
+) {
 
   const summary = data?.summary || {};
   const detail = data?.detail || {};
@@ -440,9 +449,13 @@ async function prosesBanyakResi(
     .map((item) =>
       item.replace(/[\s,]+/g, "").trim()
     )
-    .filter((item) => item.length > 0);
+    .filter((item) =>
+      item.length > 0
+    );
 
-  const unik = [...new Set(resiList)];
+  const unik = [
+    ...new Set(resiList)
+  ];
 
   if (unik.length > 50) {
 
@@ -527,6 +540,46 @@ async function pollingTelegram() {
         continue;
       }
 
+
+      // =================================================
+      // CEK ID TELEGRAM ADMIN
+      // =================================================
+
+      const userId =
+        String(message.from?.id || "");
+
+      if (!ADMIN_TELEGRAM_ID) {
+
+        console.error(
+          "❌ ADMIN_TELEGRAM_ID belum diatur di Railway."
+        );
+
+        continue;
+      }
+
+      if (
+        userId !==
+        String(ADMIN_TELEGRAM_ID).trim()
+      ) {
+
+        console.log(
+          "❌ AKSES DITOLAK - Telegram ID:",
+          userId
+        );
+
+        await sendMessage(
+          message.chat.id,
+          "❌ Maaf, bot ini hanya dapat digunakan oleh admin."
+        );
+
+        continue;
+      }
+
+
+      // =================================================
+      // USER YANG DIIZINKAN
+      // =================================================
+
       const chatId =
         message.chat.id;
 
@@ -535,14 +588,14 @@ async function pollingTelegram() {
 
       console.log(
         "PESAN TELEGRAM:",
-        chatId,
+        userId,
         text
       );
 
 
-      // ===============================================
+      // =================================================
       // START
-      // ===============================================
+      // =================================================
 
       if (text === "/start") {
 
@@ -562,9 +615,9 @@ async function pollingTelegram() {
       }
 
 
-      // ===============================================
+      // =================================================
       // SICEPAT
-      // ===============================================
+      // =================================================
 
       if (
         text === "🔎 Cek Resi SiCepat"
@@ -592,9 +645,9 @@ async function pollingTelegram() {
       }
 
 
-      // ===============================================
+      // =================================================
       // ID EXPRESS
-      // ===============================================
+      // =================================================
 
       if (
         text === "🔎 Cek Resi ID Express"
@@ -624,9 +677,9 @@ async function pollingTelegram() {
       }
 
 
-      // ===============================================
+      // =================================================
       // MENUNGGU RESI
-      // ===============================================
+      // =================================================
 
       if (
         waitingResi.has(chatId)
@@ -648,9 +701,9 @@ async function pollingTelegram() {
       }
 
 
-      // ===============================================
+      // =================================================
       // /LACAK SICEPAT
-      // ===============================================
+      // =================================================
 
       if (
         text
@@ -745,9 +798,17 @@ app.listen(
         : "TIDAK ADA"
     );
 
+    console.log(
+      "ADMIN_TELEGRAM_ID:",
+      ADMIN_TELEGRAM_ID
+        ? "ADA"
+        : "TIDAK ADA"
+    );
+
     if (
       TELEGRAM_TOKEN &&
-      BINDERBYTE_API_KEY
+      BINDERBYTE_API_KEY &&
+      ADMIN_TELEGRAM_ID
     ) {
 
       console.log(
